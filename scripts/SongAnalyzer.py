@@ -1,5 +1,5 @@
 import os, json, charset_normalizer
-import deeprhythm, librosa
+import deeprhythm_custom, librosa
 import numpy as np
 import scipy.signal as signal
 from sklearn.cluster import KMeans
@@ -18,7 +18,7 @@ class SongAnalyzer():
         self.info_logger = dh.LogManager(f"{Path(__file__).stem}_info-log.log")
         self.info_logger.wipe_log()
         self.file_manager = file_manager
-        self.model = deeprhythm.DeepRhythmPredictor()
+        self.model = deeprhythm_custom.DeepRhythmPredictor()
         self.model.load_model()  
 
     def build_songlist(self, imported_song_path: str|Path|os.DirEntry):
@@ -69,7 +69,7 @@ class SongAnalyzer():
         # print(tempo_lib)
         return tempo_lib[0]
 
-    def _get_tempo(self, audio_path, model: deeprhythm.DeepRhythmPredictor):
+    def _get_tempo(self, audio_path, model: deeprhythm_custom.DeepRhythmPredictor):
         tempo, confidence = model.predict(audio_path, include_confidence=True) # type: ignore
 
         if confidence < 0.7:
