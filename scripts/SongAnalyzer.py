@@ -64,7 +64,7 @@ class SongAnalyzer():
         # print(low, high)
         if low < high:
             y = self._filter_y(y, sr, int(low), int(high))
-        onset_env = librosa.onset.onset_strength(y=y, sr=sr)
+        onset_env = librosa.onset.onset_strength(y=y, sr=sr, lag=5)
         tempo_lib = librosa.feature.tempo(y=y, sr=sr, onset_envelope=onset_env)
         # print(tempo_lib)
         return tempo_lib[0]
