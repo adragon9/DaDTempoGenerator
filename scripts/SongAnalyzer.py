@@ -58,25 +58,26 @@ class SongAnalyzer():
             pass
     
     # Song analysis
-    def _librosa_tempo(self, audio_path):
-        y, sr = librosa.load(audio_path)
-        low, high = self._adaptive_cutoffs(y, int(sr))
-        # print(low, high)
-        if low < high:
-            y = self._filter_y(y, sr, int(low), int(high))
-        onset_env = librosa.onset.onset_strength(y=y, sr=sr, lag=5)
+    def _librosa_tempo(self, y, sr):
+        onset_env = librosa.onset.onset_strength(y=y, sr=sr, lag=3)
         tempo_lib = librosa.feature.tempo(y=y, sr=sr, onset_envelope=onset_env)
-        # print(tempo_lib)
         return tempo_lib[0]
 
     def _get_tempo(self, audio_path, model: deeprhythm_custom.DeepRhythmPredictor):
-        tempo, confidence = model.predict(audio_path, include_confidence=True) # type: ignore
+        y, sr = librosa.load(audio_path, sr=None)
+        audio = y # So that deeprhythm doesn't use the filtering
+        
+        low, high = self._adaptive_cutoffs(y, int(sr))
+        if low < high:
+            y = self._filter_y(y, sr, int(low), int(high))
 
+        tempo, confidence = model.predict_from_audio(audio=audio, sr=sr, include_confidence=True) # type: ignore
+        
         if confidence < 0.7:
             tempos, confs = model.predict_per_frame(audio_path, include_confidence=True)
             tempos = np.asarray(tempos)
             confs = np.asarray(confs)
-
+            
             mask = confs > 0.7
             if np.any(mask):
                 t = tempos[mask]
@@ -88,7 +89,7 @@ class SongAnalyzer():
                 # confidence = strongest frame
                 confidence = float(np.max(c))
             else:
-                tempo = self._librosa_tempo(audio_path)
+                tempo = self._librosa_tempo(y=y, sr=sr)
                 
         # Adjust up or down to get it within DaD's 120~200bpm recommended range.
         ## Plan to make this feature option in future releases.
@@ -97,13 +98,10 @@ class SongAnalyzer():
         elif tempo > 240:
             tempo = int(tempo / 2)
 
-        return tempo, confidence
+        beat_offset = self._beat_offset(y=y, sr=sr)
+        return tempo, confidence, beat_offset
 
-    def _beat_offset(self, audio_path: str | Path | os.DirEntry):
-        y, sr = librosa.load(audio_path)
-        low, high = self._adaptive_cutoffs(y, int(sr))
-        # print(low, high)
-        y = self._filter_y(y, sr, int(low), int(high))
+    def _beat_offset(self, y, sr):
         onset_env = librosa.onset.onset_strength(y=y, sr=sr)
         onset_frames = librosa.onset.onset_detect(y=y, sr=sr, onset_envelope=onset_env)
         if len(onset_frames) == 0:
@@ -182,9 +180,8 @@ class SongAnalyzer():
         path.write_text(text, encoding="utf-8")
 
     def _update_tempo(self, audio_file, model, json_file, data):
-        tempo, confidence = self._get_tempo(audio_file, model)
+        tempo, confidence, beat_offset = self._get_tempo(audio_file, model)
         tempo = int(tempo)
-        beat_offset = self._beat_offset(audio_file)
         data["tempo"] = tempo # type: ignore
         data["beatOffset"] = beat_offset # type: ignore
         self._dump_json_as_utf8(Path(json_file), data)
