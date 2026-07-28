@@ -1,7 +1,10 @@
 import os, json, charset_normalizer
-import deeprhythm_custom, librosa
+from typing import Any
+import deeprhythm_custom, librosa, torch
 import numpy as np
+import sounddevice as sd
 import scipy.signal as signal
+from scipy.ndimage import median_filter
 from sklearn.cluster import KMeans
 from pathlib import Path
 from PyQt6.QtCore import (
@@ -11,15 +14,18 @@ from PyQt6.QtCore import (
 # Custom Imports
 import helpers.DebugHelper as dh
 import scripts.FileManagement as fm
+import scripts.DataManagement as dm
 
 class SongAnalyzer():
-    def __init__(self, file_manager: fm.FileManager|None=None):
+    def __init__(self, file_manager: fm.FileManager|None=None, main_window_states: dm.MainWindowStateManager|None=None):
         self.error_logger = dh.LogManager(f"{Path(__file__).stem}_error-log.log")
         self.info_logger = dh.LogManager(f"{Path(__file__).stem}_info-log.log")
         self.info_logger.wipe_log()
         self.file_manager = file_manager
         self.model = deeprhythm_custom.DeepRhythmPredictor()
-        self.model.load_model()  
+        self.main_window_states = main_window_states
+        self.model.load_model()
+        self.tempo_segments_mode = False
 
     def build_songlist(self, imported_song_path: str|Path|os.DirEntry):
         '''
@@ -58,22 +64,30 @@ class SongAnalyzer():
             pass
     
     # Song analysis
-    def _librosa_tempo(self, y, sr):
-        onset_env = librosa.onset.onset_strength(y=y, sr=sr, lag=3)
+    def _librosa_tempo(self, y, sr, onset_env):
         tempo_lib = librosa.feature.tempo(y=y, sr=sr, onset_envelope=onset_env)
         return tempo_lib[0]
-
+    
+    # partially AI Generated adjust later.
+    def _librosa_segmented_tempo(self, y, sr, onset_env):
+        pass
+    
     def _get_tempo(self, audio_path, model: deeprhythm_custom.DeepRhythmPredictor):
         y, sr = librosa.load(audio_path, sr=None)
-        audio = y # So that deeprhythm doesn't use the filtering
+              
+        sr = int(sr)
+        low, high = self._adaptive_cutoffs(y, sr)
         
-        low, high = self._adaptive_cutoffs(y, int(sr))
         if low < high:
             y = self._filter_y(y, sr, int(low), int(high))
-
-        tempo, confidence = model.predict_from_audio(audio=audio, sr=sr, include_confidence=True) # type: ignore
         
-        if confidence < 0.7:
+        onset_env = librosa.onset.onset_strength(y=y, sr=sr)
+
+        if not self.tempo_segments_mode:
+            # y_array_fix = np.ascontiguousarray(y)
+            # tempo, confidence = model.predict_from_audio(audio=y_array_fix, sr=sr, include_confidence=True) # type: ignore
+                    
+            # if confidence < 0.7:
             tempos, confs = model.predict_per_frame(audio_path, include_confidence=True)
             tempos = np.asarray(tempos)
             confs = np.asarray(confs)
@@ -89,29 +103,100 @@ class SongAnalyzer():
                 # confidence = strongest frame
                 confidence = float(np.max(c))
             else:
-                tempo = self._librosa_tempo(y=y, sr=sr)
-                
-        # Adjust up or down to get it within DaD's 120~200bpm recommended range.
-        ## Plan to make this feature option in future releases.
-        if tempo < 100:
-            tempo *= 2
-        elif tempo > 240:
-            tempo = int(tempo / 2)
+                tempo = self._librosa_tempo(y=y, sr=sr, onset_env=onset_env)
+                confidence = 0
+                    
+            beat_offset = self._beat_offset()
+            
+            if self.main_window_states and self.main_window_states.adjustBPM == 2:
+                if tempo <= 90:
+                    tempo = tempo * 2
+                    
+            return tempo, [], confidence, beat_offset
+        else:
+            pass
+            return 0, [], 0, 0
 
-        beat_offset = self._beat_offset(y=y, sr=sr)
-        return tempo, confidence, beat_offset
-
-    def _beat_offset(self, y, sr):
-        onset_env = librosa.onset.onset_strength(y=y, sr=sr)
-        onset_frames = librosa.onset.onset_detect(y=y, sr=sr, onset_envelope=onset_env)
-        if len(onset_frames) == 0:
-            return 0.0
-
-        first_onset_sec = librosa.frames_to_time(onset_frames[0], sr=sr)
+    def _beat_offset(self):
+        offset_ms = 0
+        if self.main_window_states:
+            if self.main_window_states.currentBeatFeeling.lower() == "good":
+                match self.main_window_states.currentSpeakerType:
+                    case "Wired Headphones":
+                        offset_ms = 5
+                    case "Bluetooth Headphones":
+                        offset_ms = 180
+                    case "Desktop/PC Speakers":
+                        offset_ms = 20
+                    case "TV via HDMI":
+                        offset_ms = 55
+                    case "Steam Deck":
+                        offset_ms = 8
+                    case "Wireless 2.4GHz":
+                        offset_ms = 12
+                    case "Custom/Unkown":
+                        offset_ms = 30
+                    case _:
+                        offset_ms = 0
+                    
+            elif self.main_window_states.currentBeatFeeling.lower() == "early":
+                match self.main_window_states.currentSpeakerType:
+                    case "Wired Headphones":
+                        offset_ms = 20
+                    case "Bluetooth Headphones":
+                        offset_ms = 195
+                    case "Desktop/PC Speakers":
+                        offset_ms = 35
+                    case "TV via HDMI":
+                        offset_ms = 70
+                    case "Steam Deck":
+                        offset_ms = 23
+                    case "Wireless 2.4GHz":
+                        offset_ms = 27
+                    case "Custom/Unkown":
+                        offset_ms = 45
+                    case _:
+                        offset_ms = 0
+                    
+            elif self.main_window_states.currentBeatFeeling.lower() == "late":
+                match self.main_window_states.currentSpeakerType:
+                    case "Wired Headphones":
+                        offset_ms = -15
+                    case "Bluetooth Headphones":
+                        offset_ms = 160
+                    case "Desktop/PC Speakers":
+                        offset_ms = 0
+                    case "TV via HDMI":
+                        offset_ms = 35
+                    case "Steam Deck":
+                        offset_ms = -12
+                    case "Wireless 2.4GHz":
+                        offset_ms = -8
+                    case "Custom/Unkown":
+                        offset_ms = 10
+                    case _:
+                        offset_ms = 0
+                        
+            if self.main_window_states.currentController.lower() != "wired":
+                match self.main_window_states.currentController:
+                    case "Wireless 2.4Ghz":
+                        offset_ms += 4
+                    case "Wireless Bluetooth":
+                        offset_ms += 16
+                    case "Ignore":
+                        pass
+                    case _:
+                        pass
+                        
+            if self.main_window_states.virtualSurround == 2:
+                offset_ms += 40
+            
+            return offset_ms
         
-        return round(first_onset_sec * 1000, 3)
+        else:
+            return 0
 
-    # filter highs and lows
+    # Assistant functions
     def _filter_y(self, y, sr, lowcut=60, highcut=900, order=4):
         # Calculate normalized frequencies
         nyquist = 0.5 * sr
@@ -151,7 +236,7 @@ class SongAnalyzer():
 
         return low, high
 
-    def _cluster_tempo(self, tempos):
+    def _cluster_tempo(self, tempos) -> Any | int:
         tempos = np.asarray(tempos).reshape(-1, 1)
         if tempos.shape[0] == 1:
             return tempos[0, 0]
@@ -180,12 +265,39 @@ class SongAnalyzer():
         path.write_text(text, encoding="utf-8")
 
     def _update_tempo(self, audio_file, model, json_file, data):
-        tempo, confidence, beat_offset = self._get_tempo(audio_file, model)
-        tempo = int(tempo)
-        data["tempo"] = tempo # type: ignore
-        data["beatOffset"] = beat_offset # type: ignore
-        self._dump_json_as_utf8(Path(json_file), data)
+        if not self.tempo_segments_mode:
+            tempo, tempo_segments, confidence, beat_offset = self._get_tempo(audio_file, model)
+            tempo = int(tempo)
+            data["tempo"] = tempo # type: ignore
+            data["beatOffset"] = beat_offset # type: ignore
+            data["customTempoSections"] = []
+            self._dump_json_as_utf8(Path(json_file), data)
+        else:
+            tempo, tempo_segments, confidence, beat_offset = self._get_tempo(audio_file, model)
+            tempo = int(tempo)
+            data["tempo"] = tempo # type: ignore
+            data["beatOffset"] = beat_offset # type: ignore
+            data["customTempoSections"] = []
+            try:
+                if len(tempo_segments) > 1:
+                    for segment in tempo_segments:
+                        data["customTempoSections"].append(
+                            {
+                                "tempo":segment[2],
+                                "startAbsoluteTime":segment[0]
+                            }
+                        )
+            except:
+                pass
+            finally:
+                self._dump_json_as_utf8(Path(json_file), data)
+                confidence = 0.0
         return tempo, confidence, beat_offset
+    
+    def _update_beatoffset(self, data, json_file, beat_offset):
+        if not self.tempo_segments_mode:
+            data["beatOffset"] = beat_offset # type: ignore
+            self._dump_json_as_utf8(Path(json_file), data)
     
     # Main processor
     def run_processor(self, signal: pyqtBoundSignal):
@@ -200,33 +312,37 @@ class SongAnalyzer():
                     audio_file = file
                 elif file.name == "Meta.json":
                     json_file = str(file.path)
-                    try:
-                        data = self._load_json_utf16(Path(json_file))
-                        if self.file_manager:
-                            try:
-                                scanned_song = self.file_manager.check_scanned_song(self.song_names[i])
-                                if scanned_song:
-                                    if (data["tempo"], data["beatOffset"]) == (scanned_song["tempo"], scanned_song["beatOffset"]):
-                                        self.info_logger.write(
-                                            f"{self.song_names[i]} (Tempo: {scanned_song["tempo"]}, Confidence: {int(scanned_song["confidence"]*100)}%)" # type: ignore 
-                                            ) 
-                                        continue
-                                    else:
-                                        tempo, confidence, beat_offset = self._update_tempo(audio_file, self.model, json_file, data) # type: ignore 
+                    data = self._load_json_utf16(Path(json_file))
+                    if self.file_manager:
+                        try:
+                            scanned_song = self.file_manager.check_scanned_song(self.song_names[i])
+                            scan_low_bpm = (data["tempo"] <= 90 and self.main_window_states and self.main_window_states.adjustBPM == 2)
+                            if scanned_song and not scan_low_bpm:
+                                if data["tempo"] == scanned_song["tempo"]:
+                                    beat_offset = self._beat_offset()
+                                    self._update_beatoffset(data, json_file, beat_offset)
+                                    self.info_logger.write(
+                                        f"{self.song_names[i]} (Tempo: {scanned_song["tempo"]}, Confidence: {int(scanned_song["confidence"]*100)}%)" # type: ignore 
+                                        )
+                                    if self.file_manager:
+                                        self.file_manager.update_scanned_item(self.song_names[i], beat_offset=beat_offset) # type: ignore
+                                    continue 
                                 else:
-                                    raise KeyError
-                            except KeyError, ValueError:
-                                tempo, confidence, beat_offset = self._update_tempo(audio_file, self.model, json_file, data) # type: ignore 
-                            except Exception as e:
-                                print(e)
-                        # Log results
-                        self.info_logger.write(f"{self.song_names[i]} (Tempo: {tempo}, Confidence: {int(confidence*100)}%)") # type: ignore 
-                        if self.file_manager:
-                            self.file_manager.add_scanned_item(self.song_names[i], tempo ,beat_offset, confidence) # type: ignore
-                    except Exception as e:
-                        print(f"Error: {e} in run_processor")
-                        self.error_logger.write(f"Failed to open json file in run_processor reason: {e} (file:{path})")
+                                    tempo, confidence, beat_offset = self._update_tempo(audio_file, self.model, json_file, data) # type: ignore 
+                            else:
+                                raise KeyError
+                        except KeyError, ValueError:
+                            tempo, confidence, beat_offset = self._update_tempo(audio_file, self.model, json_file, data) # type: ignore 
+                        except Exception as e:
+                            print(e)
+                    # Log results
+                    self.info_logger.write(f"{self.song_names[i]} (Tempo: {tempo}, Confidence: {int(confidence*100)}%)") # type: ignore
+                    if self.file_manager:
+                        self.file_manager.add_scanned_item(self.song_names[i], tempo ,beat_offset, confidence) # type: ignore
                 else:
                     self.error_logger.write(f"Unknown file: {file}")
+                
+        if self.file_manager:
+            self.file_manager.save_state(main_window_states=self.main_window_states)
 
             

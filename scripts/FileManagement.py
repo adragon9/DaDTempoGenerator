@@ -1,10 +1,10 @@
 import os, json
 
 # Classes
-from pathlib import Path
+from dataclasses import asdict
 
 # Custom classes
-import helpers.DebugHelper as dh
+import scripts.DataManagement as dm
 
 class FileManager():
     def __init__(self):
@@ -117,6 +117,49 @@ class FileManager():
             
         with open(f"{self.__data_path__}\\{self.__scanned_path__}", 'w') as file:
             json.dump(scanned_songs, file, indent=4)
+            
+    def update_scanned_item(self, name: str, tempo: int|float|None=None, beat_offset: int|float|None=None, confidence: float|None=None):
+        if not os.path.exists(f"{self.__data_path__}\\{self.__scanned_path__}"):
+            return     
         
+        # update passed items        
+        with open(f"{self.__data_path__}\\{self.__scanned_path__}", 'r') as file:
+            scanned_songs = json.load(file)
+            
+            if tempo:
+                scanned_songs["songs"][name]["tempo"] = tempo
+                
+            if beat_offset:
+                scanned_songs["songs"][name]["beatOffset"] = beat_offset
+                
+            if confidence:
+                scanned_songs["songs"][name]["confidence"] = confidence
+
+        # dump dict in json
+        with open(f"{self.__data_path__}\\{self.__scanned_path__}", 'w') as file:
+            json.dump(scanned_songs, file, indent=4)
         
-        
+        return
+    
+    def save_state(self, main_window_states: dm.MainWindowStateManager|None):
+        if main_window_states:
+            with open(f"{self.__data_path__}\\{self.__scanned_path__}", 'r') as file:
+                data = json.load(file)
+            
+            user_choice_dict = asdict(main_window_states)
+            user_choice_dict_scrubbed = {}
+            for key in user_choice_dict:
+                if type(user_choice_dict[key]) == list:
+                    continue
+                else:
+                    user_choice_dict_scrubbed[key] = user_choice_dict[key]
+            
+            print(user_choice_dict_scrubbed)
+            
+            data["user_choices"] = user_choice_dict_scrubbed
+            
+            with open(f"{self.__data_path__}\\{self.__scanned_path__}", 'w') as file:
+                json.dump(data, file, indent=4)
+        else:
+            print(None)
+            return None

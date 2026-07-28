@@ -3,3 +3,8 @@
 /build
 /data
 /dist
+/old-specs
+
+# Files
+calculations.py
+old_defs.py
