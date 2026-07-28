@@ -1,4 +1,7 @@
 # DaDTempoGen README
+# NOTICE
+
+### The current beat offset gen on the main branch is incorrect! I did some research and found out that I over complicated the detection of beat offsets and it is not going to work at the moment. I can't really fix it on the main branch due to the security review process on nexus, however, I will release an experimental build that does address this.
 ## Description
 
 DaDTempoGen scans imported songs for Dead as Disco and generates a Beat Offset and Tempo estimate and writes it to the songs json file. 
@@ -30,8 +33,6 @@ DaDTempoGen scans imported songs for Dead as Disco and generates a Beat Offset a
 
 + If you are coming from nexus and the project there says that my files are suspicious you can take a look at the virus total analysis of the project [here](https://www.virustotal.com/gui/file/a162c9cd069397e349e69db1bd6abb95db29c88b3f8b1a54d5221bf02a4a0717).
   + This is only for the main branch, though feel free to run the experimental through virus total as well if you'd like.
- 
-+ Sometimes you may not here hits connect in game... I can only guess that it's because DaDTempoGen lines the tempo up with the kick and the kick of the song drowns out the sound of the punch. Not sure how to fix that.
 
 +  This relies on a vanilla installation it assumes the file path to the songs is:
     +  "C:\Users\{user}\AppData\Local\Pagoda\Saved\ImportedSongs"
