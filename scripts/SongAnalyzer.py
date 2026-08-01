@@ -300,48 +300,66 @@ class SongAnalyzer():
             self._dump_json_as_utf8(Path(json_file), data)
     
     # Main processor
+    # This needs a serious rework...
     def run_processor(self, signal: pyqtBoundSignal):
         '''
         This will allow me to send progress data back to the main window.
         '''
+        signal.emit(1) # initial emission
+        
         for i, path in enumerate(self.song_dirs):
             self.progress_string = f"Analyzing {self.song_names[i]}"
-            signal.emit(i+1)
+            
+            json_file = None
+            data = None
+            audio_file = None
+            tempo = None
+            confidence = None
+            beat_offset = None
+            
             for file in os.scandir(path):
                 if file.name == "Audio.ogg":
                     audio_file = file
                 elif file.name == "Meta.json":
                     json_file = str(file.path)
-                    data = self._load_json_utf16(Path(json_file))
-                    if self.file_manager:
-                        try:
-                            scanned_song = self.file_manager.check_scanned_song(self.song_names[i])
-                            scan_low_bpm = (data["tempo"] <= 90 and self.main_window_states and self.main_window_states.adjustBPM == 2)
-                            if scanned_song and not scan_low_bpm:
-                                if data["tempo"] == scanned_song["tempo"]:
-                                    beat_offset = self._beat_offset()
-                                    self._update_beatoffset(data, json_file, beat_offset)
-                                    self.info_logger.write(
-                                        f"{self.song_names[i]} (Tempo: {scanned_song["tempo"]}, Confidence: {int(scanned_song["confidence"]*100)}%)" # type: ignore 
-                                        )
-                                    if self.file_manager:
-                                        self.file_manager.update_scanned_item(self.song_names[i], beat_offset=beat_offset) # type: ignore
-                                    continue 
-                                else:
-                                    tempo, confidence, beat_offset = self._update_tempo(audio_file, self.model, json_file, data) # type: ignore 
-                            else:
-                                raise KeyError
-                        except KeyError, ValueError:
-                            tempo, confidence, beat_offset = self._update_tempo(audio_file, self.model, json_file, data) # type: ignore 
-                        except Exception as e:
-                            print(e)
-                    # Log results
-                    self.info_logger.write(f"{self.song_names[i]} (Tempo: {tempo}, Confidence: {int(confidence*100)}%)") # type: ignore
-                    if self.file_manager:
-                        self.file_manager.add_scanned_item(self.song_names[i], tempo ,beat_offset, confidence) # type: ignore
                 else:
                     self.error_logger.write(f"Unknown file: {file}")
+                    continue
                 
+                if json_file:
+                    data = self._load_json_utf16(Path(json_file))
+                else:
+                    continue
+                
+                if self.file_manager and (data and audio_file):
+                    scanned_song = self.file_manager.check_scanned_song(self.song_names[i])
+                    scan_low_bpm = (data["tempo"] <= 90 and self.main_window_states and self.main_window_states.adjustBPM == 2)
+                    
+                    if scanned_song:
+                        # update beat_offset
+                        beat_offset = self._beat_offset()
+                        self._update_beatoffset(data, json_file, beat_offset)
+                        
+                        # Check for game data and scanned song list tempo mismatch.
+                        if data["tempo"] != scanned_song["tempo"] or scan_low_bpm:
+                            tempo, confidence, beat_offset = self._update_tempo(audio_file, self.model, json_file, data)
+                            
+                        # log
+                        write_string = f"{self.song_names[i]} (Tempo: {scanned_song["tempo"]}, Confidence: {int(scanned_song["confidence"]*100)}%)"
+                        self.info_logger.write(write_string)
+                        
+                        # update scanned songs list
+                        if self.file_manager:
+                            self.file_manager.update_scanned_item(self.song_names[i], beat_offset=beat_offset)
+                            
+                # Log results
+                if (tempo and confidence and beat_offset):
+                    self.info_logger.write(f"{self.song_names[i]} (Tempo: {tempo}, Confidence: {int(confidence*100)}%)")
+                    if self.file_manager:
+                        self.file_manager.add_scanned_item(self.song_names[i], tempo ,beat_offset, confidence)
+                    
+            signal.emit(i+1) # emit progress
+            
         if self.file_manager:
             self.file_manager.save_state(main_window_states=self.main_window_states)
 
