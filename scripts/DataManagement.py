@@ -1,5 +1,6 @@
 from dataclasses import dataclass
-from typing import Literal
+
+# Main variable handler for the program.
 @dataclass
 class MainWindowStateManager():
     # Check boxes
@@ -12,6 +13,8 @@ class MainWindowStateManager():
                     "TV via HDMI", "Steam Deck", "Wireless 2.4GHz", "Custom/Unkown"]
     beatFeelings = ["Early", "Good", "Late"]
     controllerTypes = ["Wired", "Wireless 2.4Ghz", "Wireless Bluetooth", "Ignore"]
+    librosaReliance = ["Low", "Medium", "High"]
     currentSpeakerType: str = speakerTypes[0]
     currentBeatFeeling: str = beatFeelings[0]
     currentController: str = controllerTypes[0]
+    currentConfidenceThresh: str = librosaReliance[1]

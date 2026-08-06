@@ -4,6 +4,7 @@
 /data
 /dist
 /old-specs
+/no-include
 
 # Files
 calculations.py

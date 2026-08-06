@@ -1,20 +1,39 @@
-import os, json
+# Package imports
+import os, json, charset_normalizer
 
-# Classes
+# Class imports
+from pathlib import Path
+
+# Definition imports
 from dataclasses import asdict
 
-# Custom classes
+# Custom class imports
 import scripts.DataManagement as dm
 
 class FileManager():
     def __init__(self):
-        self.__data_path__ = r'.\data'
-        self.__settings_path__ = f"{self.__data_path__}\\config\\settings.json"
+        self.__data_path__ = Path('.\\data').resolve()
+        self.__settings_path__ = Path(os.path.join(str(self.__data_path__), "config\\settings.json")).resolve()
         self._make_dirs()
         
         self.__scanned_path__ = self.get_scanned_songs_path()
         
     # Private functions
+    def _load_json_utf16(self, path: Path):
+        raw = path.read_bytes()
+        enc = charset_normalizer.detect(raw)["encoding"] or "utf-8"
+
+        if enc.lower().startswith("utf-16"):
+            text = raw.decode(enc)
+        else:
+            text = raw.decode(enc, errors="replace")
+
+        return json.loads(text)
+ 
+    def _dump_json_as_utf8(self, path: Path, data):
+        text = json.dumps(data, indent=4, ensure_ascii=False)
+        path.write_text(text, encoding="utf-8")
+        
     def _create_settings(self):
         with open(self.__settings_path__, 'w', encoding='utf-8') as file:
             default_settings = {
@@ -34,7 +53,7 @@ class FileManager():
             try:
                 os.mkdir(self.__data_path__)
             except Exception as e:
-                print(f"Error {e} in _make_dirs()")
+                pass
                 
         # Creates the config file with default settings       
         if not os.path.exists(self.__settings_path__):
@@ -59,92 +78,56 @@ class FileManager():
     
     # These all need restructuring latter I don't like them. 
     def get_data_path(self):
-        with open(self.__settings_path__, 'r') as settings:
-            data = json.load(settings)
-            
-        self.__data_path__ = data["paths"]["data"]
-        return data["paths"]["data"]
+        data = self._load_json_utf16(self.__settings_path__)
+        return Path(data["paths"]["data"]).resolve()
     
-    def get_scanned_songs_path(self):
-        with open(self.__settings_path__, 'r') as settings:
-            data = json.load(settings)
-            
-        self.__scanned_path__ = data["files"]["scanned_songs"]
-        return data["files"]["scanned_songs"]
+    def get_scanned_songs_path(self) -> Path:
+        data = self._load_json_utf16(self.__settings_path__)
+        return Path(os.path.join(self.__data_path__, data["files"]["scanned_songs"])).resolve()
+    
+    def get_previous_settings(self):
+        try:
+            return self._load_json_utf16(self.__scanned_path__)["user_choices"]
+        except Exception as e:
+            return None
     
     def check_scanned_song(self, name):
-        if not os.path.exists(f"{self.__data_path__}\\{self.__scanned_path__}"):
-            with open(f"{self.__data_path__}\\{self.__scanned_path__}", 'w') as file:
-                scanned_songs = {
-                    "songs":{}
-                }
-                json.dump(scanned_songs, file, indent=4)
-                
-        with open(f"{self.__data_path__}\\{self.__scanned_path__}", 'r') as file:
-            scanned_songs = json.load(file)
+        scanned_songs = {
+            "songs":{}
+        }
+        try:
+            if not os.path.exists(self.__scanned_path__):
+                self._dump_json_as_utf8(self.__scanned_path__, scanned_songs)
+            scanned_songs = self._load_json_utf16(self.__scanned_path__)
+        except json.decoder.JSONDecodeError:
+            self._dump_json_as_utf8(self.__scanned_path__, scanned_songs)
+            return None
+            
         try:
             return scanned_songs["songs"][name]
         except KeyError:
             return None
             
     # List generators
-    def add_scanned_item(self, name, tempo, beat_offset, confidence):
-        if not os.path.exists(f"{self.__data_path__}\\{self.__scanned_path__}"):
-            with open(f"{self.__data_path__}\\{self.__scanned_path__}", 'w') as file:
-                scanned_songs = {
-                    "songs":{}
-                }
-                json.dump(scanned_songs, file, indent=4)
-                
-        try:
-            with open(f"{self.__data_path__}\\{self.__scanned_path__}", 'r') as file:
-                json.load(file)
-        except Exception:
-            with open(f"{self.__data_path__}\\{self.__scanned_path__}", 'w') as file:
-                scanned_songs = {
-                    "songs":{}
-                }
-                json.dump(scanned_songs, file, indent=4)
-                
-        with open(f"{self.__data_path__}\\{self.__scanned_path__}", 'r') as file:
-            scanned_songs = json.load(file)
-            
-            scanned_songs["songs"][name] = {
-                "tempo":tempo,
-                "beatOffset":beat_offset,
-                "confidence": confidence
+    def add_scanned_item(self, obj_name: str, obj: dict):
+        if not os.path.exists(self.__scanned_path__):
+            scanned_songs = {
+                "songs":{}
             }
-            
-        with open(f"{self.__data_path__}\\{self.__scanned_path__}", 'w') as file:
-            json.dump(scanned_songs, file, indent=4)
-            
-    def update_scanned_item(self, name: str, tempo: int|float|None=None, beat_offset: int|float|None=None, confidence: float|None=None):
-        if not os.path.exists(f"{self.__data_path__}\\{self.__scanned_path__}"):
-            return     
+            self._dump_json_as_utf8(self.__scanned_path__, scanned_songs)
         
-        # update passed items        
-        with open(f"{self.__data_path__}\\{self.__scanned_path__}", 'r') as file:
-            scanned_songs = json.load(file)
+        scanned_songs = self._load_json_utf16(self.__scanned_path__)                
+        scanned_songs["songs"][obj_name] = obj
+        self._dump_json_as_utf8(self.__scanned_path__, scanned_songs)
             
-            if tempo:
-                scanned_songs["songs"][name]["tempo"] = tempo
-                
-            if beat_offset:
-                scanned_songs["songs"][name]["beatOffset"] = beat_offset
-                
-            if confidence:
-                scanned_songs["songs"][name]["confidence"] = confidence
-
-        # dump dict in json
-        with open(f"{self.__data_path__}\\{self.__scanned_path__}", 'w') as file:
-            json.dump(scanned_songs, file, indent=4)
-        
-        return
-    
+    def update_scanned_item(self, obj_name: str, obj:dict):
+        data = self._load_json_utf16(self.__scanned_path__)
+        data["songs"][obj_name].update(obj)
+        self._dump_json_as_utf8(self.__scanned_path__, data)
+            
     def save_state(self, main_window_states: dm.MainWindowStateManager|None):
         if main_window_states:
-            with open(f"{self.__data_path__}\\{self.__scanned_path__}", 'r') as file:
-                data = json.load(file)
+            data = self._load_json_utf16(self.__scanned_path__)
             
             user_choice_dict = asdict(main_window_states)
             user_choice_dict_scrubbed = {}
@@ -154,12 +137,9 @@ class FileManager():
                 else:
                     user_choice_dict_scrubbed[key] = user_choice_dict[key]
             
-            print(user_choice_dict_scrubbed)
-            
             data["user_choices"] = user_choice_dict_scrubbed
             
-            with open(f"{self.__data_path__}\\{self.__scanned_path__}", 'w') as file:
+            with open(self.__scanned_path__, 'w') as file:
                 json.dump(data, file, indent=4)
         else:
-            print(None)
             return None
