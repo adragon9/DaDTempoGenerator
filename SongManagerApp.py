@@ -7,11 +7,11 @@ from PyQt6.QtWidgets import (
     QMainWindow, QApplication, QWidget,
     QPushButton, QVBoxLayout, QLabel,
     QProgressBar, QCheckBox, QHBoxLayout,
-    QComboBox
+    QComboBox, QListView
 )
 from PyQt6.QtCore import (
     Qt, QObject, pyqtSignal,
-    QThread
+    QThread, QStringListModel
 )
 
 # Custom class imports
@@ -28,13 +28,16 @@ except:
     pass
 
 class Worker(QObject):
-    finished = pyqtSignal()          # emitted when run() is done
-    progress = pyqtSignal(int)       # optional: percent‑complete
-
-    def __init__(self, song_analyzer: sa.SongAnalyzer, state_manager: dm.MainWindowStateManager):
+    finished = pyqtSignal()
+    progress = pyqtSignal(int)
+    main_messenger = pyqtSignal(str)
+    sub_messenger = pyqtSignal(str)
+    list_delivery = pyqtSignal(list)
+    
+    def __init__(self, song_analyzer: sa.SongAnalyzer):
         super().__init__()
         self.song_analyzer = song_analyzer
-        self.song_analyzer.set_progress_signal(self.progress)
+        self.song_analyzer.set_signals(self.progress, self.main_messenger, self.sub_messenger, self.list_delivery)
         
     def run(self):
         try:
@@ -46,6 +49,83 @@ class Worker(QObject):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
+        # App styling
+        style_sheet = """
+            QWidget {
+                background: #0e0e0e;
+            }
+
+            QLabel {
+                font-size: 14pt;
+            }
+            
+            QComboBox {
+                font-size: 14pt;
+                text-align: center;
+                padding-left: 8px;
+                padding-right: 8px;
+            }
+            
+            QComboBox:hover {
+                background: #2c2c2c;
+            }
+            
+            QProgressBar {
+                border: 2px solid #555;
+                border-radius: 7px;
+                background: #FFF;
+                height: 24px;
+                min-height: 24px;
+                text-align: center;
+                font: 12px;
+                color: #000
+            }
+            
+            QProgressBar::chunk {
+                background: #3a5c34;
+                border-radius: 5px;
+            }
+            
+            QPushButton {
+                background: #3a5c34;
+                border-radius: 8px;
+                font-size: 14pt;
+                height: 36px;
+            }
+            
+            QCheckBox {
+                border-radius: 8px;
+                font-size: 14pt;
+            }
+            
+            QCheckBox::indicator:unchecked{
+                background: #fff;
+                border-radius: 4px;
+            }
+            
+            QCheckBox::indicator:unchecked:hover{
+                background: #bebebe;
+            }
+            
+            QCheckBox::indicator:checked{
+                background: #3a5c34;
+                border: 2px solid #fff;
+                border-radius: 4px;
+            }
+            
+            QCheckBox::indicator:checked:hover{
+                background: #1a2518;
+            }
+            
+            QPushButton:hover {
+                background: #1a2518;
+            }
+
+            QPushButton:pressed {
+                background: #6ca760
+            }
+        """
+        self.setStyleSheet(style_sheet)
         self.file_manager = fm.FileManager()
         self.error_logger = dh.LogManager(f"{Path(__file__).stem}_error-log.log")
         self.info_logger = dh.LogManager(f"{Path(__file__).stem}_info-log.log")
@@ -71,14 +151,31 @@ class MainWindow(QMainWindow):
         self.main_layout = QVBoxLayout()
         self.main_widget.setLayout(self.main_layout)
         
-        display_layout = QHBoxLayout()
+        display_layout = QVBoxLayout()
         
+        # List view
+        self.main_view = QListView()
+        default = self.song_analyzer.get_song_names()
+        self.liststringmodel = QStringListModel(default)
+        self.main_view.setModel(self.liststringmodel)
+        self.main_view.setMinimumHeight(400)
+        self.main_view.setEditTriggers(QListView.EditTrigger.NoEditTriggers)
+        
+        self.main_layout.addWidget(self.main_view, stretch=1)
+        
+        # Labels
         self.main_label = QLabel()
         self.main_label.setText("Idle")
-        self.main_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.main_label.setAlignment(Qt.AlignmentFlag.AlignCenter|Qt.AlignmentFlag.AlignBottom)
         
-        self.main_layout.addLayout(display_layout, stretch=4)
+        self.message_label = QLabel()
+        self.message_label.setHidden(True)
+        self.message_label.setText("")
+        self.message_label.setAlignment(Qt.AlignmentFlag.AlignCenter|Qt.AlignmentFlag.AlignTop)
+        
+        self.main_layout.addLayout(display_layout, stretch=1)
         display_layout.addWidget(self.main_label, stretch=1)
+        display_layout.addWidget(self.message_label, stretch=1)
         
         # Checkboxes
         checkbox_layout = QHBoxLayout()
@@ -95,7 +192,7 @@ class MainWindow(QMainWindow):
         else:
             self.check_vSurround.setCheckState(Qt.CheckState.Unchecked)
         
-        self.main_layout.addLayout(checkbox_layout, stretch=2)
+        self.main_layout.addLayout(checkbox_layout, stretch=1)
         checkbox_layout.addWidget(self.check_adjust_bpm, stretch=1, alignment=Qt.AlignmentFlag.AlignCenter|Qt.AlignmentFlag.AlignBottom)
         checkbox_layout.addWidget(self.check_vSurround, stretch=1, alignment=Qt.AlignmentFlag.AlignCenter|Qt.AlignmentFlag.AlignBottom)
         
@@ -120,20 +217,7 @@ class MainWindow(QMainWindow):
         self.combo_controllertype = QComboBox()
         self.combo_controllertype.addItems(self.state_manager.controllerTypes)
         self.combo_controllertype.setCurrentText(self.state_manager.currentController)
-        
-        self.combo_label_4 = QLabel("Confidence threshold for switching analysis methods")
-        self.combo_label_4.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.combo_precisionlevel = QComboBox()
-        self.combo_precisionlevel.addItems(self.state_manager.librosaReliance)
-        self.combo_precisionlevel.setCurrentText(self.state_manager.currentConfidenceThresh)
-        self.combo_warning_1 = QLabel("")
-        if self.state_manager.currentConfidenceThresh== "High":
-            self.combo_warning_1.setText(f"WARNING: Setting this to {self.state_manager.currentConfidenceThresh} will greatly increase processing time!")
-        elif self.state_manager.currentConfidenceThresh == "Medium":
-            self.combo_warning_1.setText(f"Setting this to {self.state_manager.currentConfidenceThresh} is recommended.")
-        else:
-            self.combo_warning_1.setHidden(True)
-        self.combo_warning_1.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
         
         self.main_layout.addLayout(combobox_layout_1)
         self.main_layout.addLayout(combobox_layout_2)
@@ -143,9 +227,6 @@ class MainWindow(QMainWindow):
         combobox_layout_1.addWidget(self.combo_beatfeel, stretch=1)
         combobox_layout_1.addWidget(self.combo_label_3)
         combobox_layout_1.addWidget(self.combo_controllertype, stretch=1)
-        combobox_layout_2.addWidget(self.combo_label_4)
-        combobox_layout_2.addWidget(self.combo_precisionlevel, stretch=1)
-        combobox_layout_2.addWidget(self.combo_warning_1)
         
         self.progress_bar = QProgressBar()
         self.progress_bar.setMinimum(0)
@@ -182,66 +263,20 @@ class MainWindow(QMainWindow):
             self.state_manager.currentController = self.persistent_settings["currentController"]
             self.state_manager.currentConfidenceThresh = self.persistent_settings["currentConfidenceThresh"]
         
-    def progress_action(self, signal):
-        try:
-            progress_string = self.song_analyzer.get_progress_string()
-        except Exception as e:
-            progress_string = None
-            self.error_logger.write(f"Error {e} while trying to get the progress string.")
-            
-        match signal:
-            case 101:
-                self.main_label.setText("Loading deeprhythm model...")
-            case 102:
-                self.main_label.setText(progress_string)
-            case 201:
-                self.main_label.setText(f"""{progress_string}
-                                        \nGetting tempo(1/2)""")
-            case 2011:
-                self.main_label.setText(f"""{progress_string}
-                                        \nGetting tempo(1/2)
-                                        \nAttempting deeprhythm analysis""")
-            case 20111:
-                self.main_label.setText(f"""{progress_string}
-                                        \nGetting tempo(1/2)
-                                        \ndeeprhythm confidence too low attempting librosa analysis""")
-            case 201111:
-                self.main_label.setText(f"""{progress_string}
-                                        \nGetting tempo(1/2)
-                                        \ndeeprhythm confidence too low attempting librosa analysis
-                                        \nPreparing onset envelope(1/2)""")
-            case 201112:
-                self.main_label.setText(f"""{progress_string}
-                                        \nGetting tempo(1/2)
-                                        \ndeeprhythm confidence too low attempting librosa analysis
-                                        \nEstimating tempo(2/2)""")
-            case 202:
-                self.main_label.setText(f"""{progress_string}
-                                        \nGetting beat offset(2/2)""")
-            case 2021:
-                self.main_label.setText(f"""{progress_string}
-                                        \nGetting beat offset(2/2)
-                                        \nPreparing onset envelope(1/4)""")
-            case 2022:
-                self.main_label.setText(f"""{progress_string}
-                                        \nGetting beat offset(2/2)
-                                        \nDetecting first beat(2/4)""")
-            case 2023:
-                self.main_label.setText(f"""{progress_string}
-                                        \nGetting beat offset(2/2)
-                                        \nConverting first frame to seconds(3/4)""")
-            case 2024:
-                self.main_label.setText(f"""{progress_string}
-                                        \nGetting beat offset(2/2)
-                                        \nCalculating offset(4/4)""")
-            case _:
-                self.percent_processed = int((signal / self.song_count)*100)
-                self.progress_bar.setValue(self.percent_processed)
-                if progress_string:
-                    self.main_label.setText(progress_string)
-                else:
-                    self.main_label.setText("Error retrieving song name.")
-            
+    def progress_action(self, signal):            
+        self.percent_processed = int((signal / self.song_count)*100)
+        self.progress_bar.setValue(self.percent_processed)
+    
+    def main_messenger_manager(self, signal):
+        self.main_label.setText(signal)
+    
+    def sub_messenger_manager(self, signal):
+        self.message_label.setText(signal)
+    
+    def list_manager(self, signal):
+        self.liststringmodel = QStringListModel(signal)
+        self.main_view.setModel(self.liststringmodel)
+    
     def run_button_action(self):
         """Launch the CPU‑heavy job in a worker thread."""
         if self.worker_thread and self.worker_thread.isRunning():
@@ -249,12 +284,15 @@ class MainWindow(QMainWindow):
 
         # Create the QThread + Worker pair
         self.worker_thread = QThread()
-        self.worker = Worker(self.song_analyzer, self.state_manager)   # keep reference
+        self.worker = Worker(self.song_analyzer)   # keep reference
         self.worker.moveToThread(self.worker_thread)
             
         # Connect signals & slots
         self.worker_thread.started.connect(self.worker.run)
         self.worker.progress.connect(lambda a: self.progress_action(a))
+        self.worker.sub_messenger.connect(lambda a: self.sub_messenger_manager(a))
+        self.worker.main_messenger.connect(lambda a: self.main_messenger_manager(a))
+        self.worker.list_delivery.connect(lambda a: self.list_manager(a))
         self.worker.finished.connect(self.on_worker_finished)
         self.worker.finished.connect(self.worker_thread.quit)
         # Keep disabled #
@@ -283,7 +321,13 @@ class MainWindow(QMainWindow):
         comboboxes = self.main_widget.findChildren(QComboBox)
         for combobox in comboboxes:
             combobox.setEnabled(False)
-    
+        # Listviews
+        listviews = self.main_widget.findChildren(QListView)
+        for list in listviews:
+            list.setEnabled(False)
+        # Show Processing Elements
+        self.message_label.setHidden(False)
+        
     def enable_elements(self):
         # Buttons
         buttons = self.main_widget.findChildren(QPushButton)
@@ -297,7 +341,13 @@ class MainWindow(QMainWindow):
         comboboxes = self.main_widget.findChildren(QComboBox)
         for combobox in comboboxes:
             combobox.setEnabled(True)
-        
+        # Listviews
+        listviews = self.main_widget.findChildren(QListView)
+        for list in listviews:
+            list.setEnabled(True)
+            
+        # Hide Processing Elements
+        self.message_label.setHidden(True)
     # Connections
     def update_checkboxes(self):
         self.state_manager.adjustBPM = self.check_adjust_bpm.checkState().value
@@ -307,15 +357,15 @@ class MainWindow(QMainWindow):
         self.state_manager.currentSpeakerType = self.combo_audiodevice.currentText()
         self.state_manager.currentBeatFeeling = self.combo_beatfeel.currentText()
         self.state_manager.currentController = self.combo_controllertype.currentText()
-        self.state_manager.currentConfidenceThresh = self.combo_precisionlevel.currentText()
-        if self.state_manager.currentConfidenceThresh== "High":
-            self.combo_warning_1.setHidden(False)
-            self.combo_warning_1.setText(f"WARNING: Setting this to {self.state_manager.currentConfidenceThresh} will greatly increase processing time!")
-        elif self.state_manager.currentConfidenceThresh == "Medium":
-            self.combo_warning_1.setHidden(False)
-            self.combo_warning_1.setText(f"Setting this to {self.state_manager.currentConfidenceThresh} is recommended.")
-        else:
-            self.combo_warning_1.setHidden(True)
+        # self.state_manager.currentConfidenceThresh = self.combo_precisionlevel.currentText()
+        # if self.state_manager.currentConfidenceThresh== "High":
+        #     self.combo_warning_1.setHidden(False)
+        #     self.combo_warning_1.setText(f"WARNING: Setting this to {self.state_manager.currentConfidenceThresh} will greatly increase processing time!")
+        # elif self.state_manager.currentConfidenceThresh == "Medium":
+        #     self.combo_warning_1.setHidden(False)
+        #     self.combo_warning_1.setText(f"Setting this to {self.state_manager.currentConfidenceThresh} is recommended.")
+        # else:
+        #     self.combo_warning_1.setHidden(True)
 
         
 if __name__ == "__main__":     
@@ -328,7 +378,7 @@ if __name__ == "__main__":
             mainWindow.setWindowTitle(f"DaD Tempo Generator {data}")
     except:
         mainWindow.setWindowTitle("DaD Tempo Generator")
-    mainWindow.setMinimumSize(900, 600)
+    mainWindow.setMinimumSize(1200, 600)
 
     mainWindow.show()
     sys.exit(app.exec())

@@ -8,14 +8,15 @@ from pathlib import Path
 from PyQt6.QtCore import (
     pyqtBoundSignal
 )
-
+from typing import Literal
 # Custom Imports
 import helpers.DebugHelper as dh
 import scripts.FileManagement as fm
 import scripts.DataManagement as dm
 
 class SongAnalyzer():
-    def __init__(self, file_manager: fm.FileManager, main_window_states: dm.MainWindowStateManager, progress_signal: pyqtBoundSignal | None = None):
+    def __init__(self, file_manager: fm.FileManager, main_window_states: dm.MainWindowStateManager, progress_signal: pyqtBoundSignal | None = None,
+                 main_messenger: pyqtBoundSignal | None = None, sub_messenger: pyqtBoundSignal | None = None, list_delivery: pyqtBoundSignal | None = None):
         self.error_logger = dh.LogManager(f"{Path(__file__).stem}_error-log.log")
         self.info_logger = dh.LogManager(f"{Path(__file__).stem}_info-log.log")
         self.info_logger.wipe_log()
@@ -24,6 +25,8 @@ class SongAnalyzer():
         self.main_window_states = main_window_states
         self.tempo_segments_mode = False
         self.progress_signal = progress_signal
+        self.main_messenger = main_messenger
+        self.sub_messenger = sub_messenger
 
     # Prep functions        
     def build_songlist(self, imported_song_path: str|Path|os.DirEntry):
@@ -46,18 +49,37 @@ class SongAnalyzer():
             self.error_logger.write(f"Error {e} while attempting to scan {imported_song_path}")
 
     def load_predictor(self):
-        self._emit_signal(101)
+        self._emit_signal('mm', "Loading prediction model...")
         self.model.load_model() 
     
     # Signal management
     # Called from main window to get signal
-    def set_progress_signal(self, signal: pyqtBoundSignal):
-        self.progress_signal = signal
+    def set_signals(self,
+                    progress_signal: pyqtBoundSignal,
+                    main_messenger: pyqtBoundSignal,
+                    sub_messenger: pyqtBoundSignal,
+                    list_delivery: pyqtBoundSignal
+                ):
+        self.progress_signal = progress_signal
+        self.main_messenger = main_messenger
+        self.sub_messenger = sub_messenger
+        self.list_delivery = list_delivery
 
     # Emits progress signal code
-    def _emit_signal(self, signal_code: int):
-        if self.progress_signal:
-            self.progress_signal.emit(signal_code)
+    def _emit_signal(self, signal_code: Literal["ps","mm","sm"], message: str | int = ""):
+        '''
+        signal codes:
+        - ps: Progress signal
+        - mm: Main messenger
+        - sm: Sub messenger
+        '''
+        
+        if self.progress_signal and signal_code == "ps":
+            self.progress_signal.emit(message)
+        elif self.sub_messenger and signal_code == "sm":
+            self.sub_messenger.emit(message)
+        elif self.main_messenger and signal_code == "mm":
+            self.main_messenger.emit(message)
             
     # get functions  
     def get_song_names(self):
@@ -70,12 +92,6 @@ class SongAnalyzer():
         self.song_count = len(self.get_song_names())
         return self.song_count
     
-    def get_progress_string(self):
-        if self.progress_string:
-            return self.progress_string
-        else:
-            pass
-
     # Logic helpers
     def _check_rescan(self):
         # Currently either all settings are there or none I'll need to fix that.
@@ -117,93 +133,8 @@ class SongAnalyzer():
             
         return rescan_tempo, rescan_beat_offset
 
-    def _get_confidence_threshold(self)-> float | int:
-        extreme_code = 1
-        if not self.main_window_states:
-            return extreme_code
-
-        match self.main_window_states.currentConfidenceThresh:
-            case "Low":
-                return .7
-            case "Medium":
-                return .8
-            case "High":
-                return .9
-            case _:
-                return extreme_code
-
-    # Song analysis
-    def _onset_evaluation(self, y, sr):
-        harmonics, percussion = librosa.effects.hpss(y)
-        
-        onset_env_perc = librosa.onset.onset_strength(
-            y=percussion,
-            sr=sr,
-            aggregate=np.mean,
-        )
-        onset_env_harm = librosa.onset.onset_strength(
-            y=harmonics,
-            sr=sr,
-            aggregate=np.mean
-        )
-        
-        peaks_perc = librosa.onset.onset_detect(
-            y=y,
-            sr=sr,
-            onset_envelope=onset_env_perc
-        )
-        peaks_harm = librosa.onset.onset_detect(
-            y=y,
-            sr=sr,
-            onset_envelope=onset_env_harm
-        )
-
-        tempogram_perc = librosa.feature.tempogram(
-            onset_envelope=onset_env_perc,
-            sr=sr
-        )
-        tempogram_harm = librosa.feature.tempogram(
-            onset_envelope=onset_env_perc,
-            sr=sr
-        )
-        
-        onset_env_perc_energy = np.sum(onset_env_perc)
-        onset_env_harm_energy = np.sum(onset_env_harm)
-        
-        num_onsets_perc = len(peaks_perc)
-        num_onsets_harm = len(peaks_harm)
-        
-        tempogram_perc_rms = float(np.max(np.mean(tempogram_perc, axis=1)))
-        tempogram_harm_rms = float(np.max(np.mean(tempogram_harm, axis=1)))
-        
-        perc_data = (onset_env_perc_energy, num_onsets_perc, tempogram_perc_rms)
-        harm_data = (onset_env_harm_energy, num_onsets_harm, tempogram_harm_rms)
-        
-        perc_score = sum(perc_data)
-        harm_score = sum(harm_data)
-
-        if perc_score > harm_score:
-            return onset_env_perc
-        elif perc_score < harm_score:
-            return onset_env_harm
-        else:
-            return librosa.onset.onset_strength(y=y, sr=sr, aggregate=np.mean)
-        
-    def _librosa_tempo(self, y, sr, onset_env, tempo_guess: int | float | None = None):
-        print(tempo_guess)
-        if tempo_guess:
-            tempo = librosa.feature.tempo(y=y, sr=sr, onset_envelope=onset_env, start_bpm=tempo_guess)
-        else:
-            tempo = librosa.feature.tempo(y=y, sr=sr, onset_envelope=onset_env)
-        try:
-            tempo = float(tempo)
-        except TypeError as e:
-            tempo = float(tempo[0]) # type: ignore
-            self.error_logger.write(f"Error {e} while conver")
-            
-        return tempo
-    
-    def _beat_offset(self, audio_file, onset_strength: np.ndarray | None = None, tempo: int | float = 120):
+    # Song analysis            
+    def _beat_offset(self, audio_file, tempo: int | float = 120):
         offset_ms = 0
         if self.main_window_states:
             if self.main_window_states.currentBeatFeeling.lower() == "good":
@@ -277,21 +208,15 @@ class SongAnalyzer():
             if self.main_window_states.virtualSurround == 2:
                 offset_ms += 40
         
-        self._emit_signal(2021)
         # Get time to first beat
         y, sr = librosa.load(audio_file, sr=None)
-        sr = sr // 2
-        if not np.any(onset_strength): 
-            onset_strength = self._onset_evaluation(y, sr)
+        hop_length = int(sr // (len(y) // sr))
         
-        self._emit_signal(2021)
-        onset_env = librosa.onset.onset_detect(y=y, sr=sr, onset_envelope=onset_strength, backtrack=True)
-        
-        self._emit_signal(2021)
-        beat_timing = librosa.frames_to_time(onset_env, sr=sr)
+        onset_detect = librosa.onset.onset_detect(y=y, sr=sr, hop_length=hop_length)
+
+        beat_timing = librosa.frames_to_time(onset_detect, sr=sr, hop_length=hop_length)
         first_beat_ms = (beat_timing[0] * 1000)
         
-        self._emit_signal(2021)
         if first_beat_ms:
             beat_length_ms = 60000 / tempo
             return_val = first_beat_ms + offset_ms
@@ -318,55 +243,91 @@ class SongAnalyzer():
             return tempo, old_tempo
         else:
             return tempo, tempo
+        
+    def list_to_num(self, item)->float|int:
+        try:
+            return item[0]
+        except:
+            return item
     
+    def _env_quality_check(self, onset_env):
+        max_env = onset_env.max()
+        mean_env = onset_env.mean()
+        env_ratio = max_env / (mean_env + 1e-6)
+        
+        good_max = max_env > .3
+        good_mean = mean_env > .05
+        good_ratio = env_ratio > 2.0
+        
+        checks = [good_max, good_ratio, good_mean]
+        passes = 0
+        
+        for check in checks:
+            if check:
+                passes += 1
+        
+        if passes >= 2:
+            return True
+        else:
+            return False
+    
+    def _perc_score(self, y, sr, hop_length):
+        self._emit_signal('sm', 'Analyzing percussion content[oxxx]')
+        S = np.abs(librosa.stft(y, hop_length=hop_length))
+        H, P = librosa.decompose.hpss(S)
+        
+        self._emit_signal('sm', 'Analyzing percussion content[ooxx]')
+        # Frame‑wise energies
+        H_e = np.sum(H, axis=0)
+        P_e = np.sum(P, axis=0)
+        eps = 1e-10
+        frame_ratio = P_e / (H_e + eps)
+        
+        self._emit_signal('sm', 'Analyzing percussion content[ooox]')
+        # Robust stats
+        median = np.median(frame_ratio)
+        dominant_frames = np.mean(frame_ratio > 1.0)   # proportion where percussive > harmonic
+
+        self._emit_signal('sm', 'Analyzing percussion content[oooo]')
+        # Flux cue
+        flux_P = librosa.onset.onset_strength(S=P, sr=sr, hop_length=hop_length)
+        flux_H = librosa.onset.onset_strength(S=H, sr=sr, hop_length=hop_length)
+        flux_ratio = flux_P.mean() / (flux_H.mean() + eps)
+
+        return sum([median, dominant_frames, flux_ratio])
+
     # Main tempo retrieval
     def _get_tempo(self, audio_path, model: deeprhythm_custom.DeepRhythmPredictor):
-        tempo = 0.0
-        confidence = 0.0
+        confidence = 0.0 # Currently not used, legacy var
+        self._emit_signal('sm', "Loading song...")
+        y, sr = librosa.load(audio_path, sr=None)
         
-        y = None
-        sr = None
-        onset_env = None
-        
-        precision_level = self._get_confidence_threshold()
-        
-        self._emit_signal(201)
-        self._emit_signal(2011)
-        tempo, confidence = model.predict(audio_path, include_confidence=True)# type: ignore
-        if confidence < precision_level:
-            self._emit_signal(20111)
-            y, sr = librosa.load(audio_path, sr=None)
-            sr = sr // 2
-        
-            self._emit_signal(201111)
-            onset_env = self._onset_evaluation(y, sr)
-            
-            self._emit_signal(201112)
-            tempo = self._librosa_tempo(y=y, sr=sr, onset_env=onset_env, tempo_guess=tempo)
-            confidence = 999
-            
-        self._emit_signal(202)
-        if not np.all((np.any(y), np.any(sr), np.any(onset_env))):
-            self._emit_signal(2021)
-            y, sr = librosa.load(audio_path, sr=None)
-            sr = sr // 2
-            onset_env = self._onset_evaluation(y, sr)
-            
-        beat_offset = self._beat_offset(
-            audio_file=audio_path,
-            onset_strength=onset_env,
-            tempo=tempo
-        )
-                       
+        hop_length = int(sr // (len(y) // sr))
+        self._emit_signal('sm', 'Analyzing percussion content[xxxx]')
+        perc_score = self._perc_score(y, sr, hop_length)
+        self._emit_signal('sm', f"Percussion score: {perc_score}")
+        if perc_score >= 2.55:
+            self._emit_signal('sm', f"Percussion score {perc_score}, running deeprhythm...")
+            tempo = model.predict(audio_path)
+        else:            
+            if perc_score > 1.05:
+                self._emit_signal('sm', f"Percussion score {perc_score}, running beat track...")
+                tempo, beats = librosa.beat.beat_track(y=y, sr=sr, hop_length=hop_length)
+            else:
+                self._emit_signal('sm', f"Percussion score {perc_score}, running feature tempo...")
+                tempo = librosa.feature.tempo(y=y, sr=sr, hop_length=hop_length)
+        tempo = self.list_to_num(tempo)      
+        self._emit_signal('sm', f"Tempo estimate: {tempo}")
+        beat_offset = self._beat_offset(audio_file=audio_path, tempo=tempo)
+        self._emit_signal('sm', f"Tempo estimate: {tempo}\nBeat Offset: {beat_offset}\nWrapping up...")
         return tempo, confidence, beat_offset
     
     # Main
     def run_processor(self):
         scanned_song = {}
-            
+        self.list_delivery.emit(self.song_names)
         for i, path in enumerate(self.song_dirs):
-            self._emit_signal(102)
-            self.progress_string = f"Analyzing {self.song_names[i]}"
+            self._emit_signal("mm", f"{self.song_names[i]}")
             
             json_file = None
             imported_song = None
@@ -468,5 +429,5 @@ class SongAnalyzer():
                         self.file_manager.update_scanned_item(self.song_names[i], song_data)
                     else:
                         self.file_manager.add_scanned_item(self.song_names[i], song_data)
-            self._emit_signal(i+1)
+            self._emit_signal('ps', i+1)
         self.file_manager.save_state(main_window_states=self.main_window_states)

@@ -10,8 +10,8 @@ class MainWindowStateManager():
     
     # Combobox stuff
     speakerTypes = ["Wired Headphones", "Bluetooth Headphones", "Desktop/PC Speakers",
-                    "TV via HDMI", "Steam Deck", "Wireless 2.4GHz", "Custom/Unkown"]
-    beatFeelings = ["Early", "Good", "Late"]
+                    "TV via HDMI", "Steam Deck", "Wireless 2.4GHz", "Custom/Unkown", "Ignore"]
+    beatFeelings = ["Early", "Good", "Late", "Ignore"]
     controllerTypes = ["Wired", "Wireless 2.4Ghz", "Wireless Bluetooth", "Ignore"]
     librosaReliance = ["Low", "Medium", "High"]
     currentSpeakerType: str = speakerTypes[0]
