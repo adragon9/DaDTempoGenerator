@@ -36,6 +36,7 @@ requests==2.34.2
 scikit-learn==1.9.0
 scipy==1.18.0
 setuptools==83.0.0
+sounddevice==0.5.5
 soundfile==0.14.0
 soxr==1.1.0
 standard-aifc==3.13.0
