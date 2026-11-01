@@ -11,14 +11,8 @@ This program is designed to work on dead as disco to generate tempo and beat off
 1. Download the 7z archive containing the program
 2. Extract it to any **NON-SYSTEM** location.
 
-### Usage
+### Notes
 
-1. Run the exe.
-    + DO NOT MOVE THE FILE "deeprhythm-0.7.pth" OUT OF THE SAME FOLDER AS THE EXE. IT WILL CRASH.
-    + The game will not update at run time, you must run this *and then* start the game.
+- Song scans depending on hardware and song size can take 15 seconds on good hardware to likely minutes on weak hard. I do not have access to a variety of devices to test this on my usual song scan time is 15~30 seconds on my hardware. Please be aware of this when using with large lists of songs.
 
-2. Select your device setup, how the beat timings feel and the level of precision you want to aim for.
-
-3. Click run.
-
-4. All logs and information generated are in the data folder.
+- DO NOT DELETE THE SOUND FOLDER. I forgot to put contingencies in place for this build so the program will most certainly crash without it.

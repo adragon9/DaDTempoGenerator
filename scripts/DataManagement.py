@@ -8,13 +8,16 @@ class MainWindowStateManager():
     adjustBPM: int = 2
     virtualSurround: int = 0
     
+    # Global offset, signed int    
+    globalOffset: int = 0
+    
     # Combobox stuff
-    speakerTypes = ["Wired Headphones", "Bluetooth Headphones", "Desktop/PC Speakers",
-                    "TV via HDMI", "Steam Deck", "Wireless 2.4GHz", "Custom/Unkown", "Ignore"]
-    beatFeelings = ["Early", "Good", "Late", "Ignore"]
-    controllerTypes = ["Wired", "Wireless 2.4Ghz", "Wireless Bluetooth", "Ignore"]
-    librosaReliance = ["Low", "Medium", "High"]
-    currentSpeakerType: str = speakerTypes[0]
-    currentBeatFeeling: str = beatFeelings[0]
-    currentController: str = controllerTypes[0]
-    currentConfidenceThresh: str = librosaReliance[1]
+    # speakerTypes = ["Wired Headphones", "Bluetooth Headphones", "Desktop/PC Speakers",
+    #                 "TV via HDMI", "Steam Deck", "Wireless 2.4GHz", "Custom/Unkown", "Ignore"]
+    # beatFeelings = ["Early", "Good", "Late", "Ignore"]
+    # controllerTypes = ["Wired", "Wireless 2.4Ghz", "Wireless Bluetooth", "Ignore"]
+    # librosaReliance = ["Low", "Medium", "High"]
+    # currentSpeakerType: str = speakerTypes[0]
+    # currentBeatFeeling: str = beatFeelings[0]
+    # currentController: str = controllerTypes[0]
+    # currentConfidenceThresh: str = librosaReliance[1]

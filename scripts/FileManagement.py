@@ -85,7 +85,7 @@ class FileManager():
         data = self._load_json_utf16(self.__settings_path__)
         return Path(os.path.join(self.__data_path__, data["files"]["scanned_songs"])).resolve()
     
-    def get_previous_settings(self):
+    def get_previous_user_choices(self):
         try:
             return self._load_json_utf16(self.__scanned_path__)["user_choices"]
         except Exception as e:
@@ -130,6 +130,7 @@ class FileManager():
             data = self._load_json_utf16(self.__scanned_path__)
             
             user_choice_dict = asdict(main_window_states)
+            print(user_choice_dict)
             user_choice_dict_scrubbed = {}
             for key in user_choice_dict:
                 if type(user_choice_dict[key]) == list:
@@ -137,6 +138,7 @@ class FileManager():
                 else:
                     user_choice_dict_scrubbed[key] = user_choice_dict[key]
             
+            print(user_choice_dict_scrubbed)
             data["user_choices"] = user_choice_dict_scrubbed
             
             with open(self.__scanned_path__, 'w') as file:

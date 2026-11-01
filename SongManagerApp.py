@@ -7,11 +7,17 @@ from PyQt6.QtWidgets import (
     QMainWindow, QApplication, QWidget,
     QPushButton, QVBoxLayout, QLabel,
     QProgressBar, QCheckBox, QHBoxLayout,
-    QComboBox, QListView
+    QComboBox, QListView, QDialog,
+    QMenu
 )
 from PyQt6.QtCore import (
     Qt, QObject, pyqtSignal,
-    QThread, QStringListModel
+    QThread, QStringListModel, QTimer,
+    QUrl, QElapsedTimer, QPoint,
+    QModelIndex
+)
+from PyQt6.QtMultimedia import (
+    QSoundEffect
 )
 
 # Custom class imports
@@ -34,15 +40,23 @@ class Worker(QObject):
     sub_messenger = pyqtSignal(str)
     list_delivery = pyqtSignal(list)
     
-    def __init__(self, song_analyzer: sa.SongAnalyzer):
+    def __init__(self, song_analyzer: sa.SongAnalyzer, single_scan: bool = False, folder_name: str|None=None):
         super().__init__()
         self.song_analyzer = song_analyzer
-        self.song_analyzer.set_signals(self.progress, self.main_messenger, self.sub_messenger, self.list_delivery)
+        self.song_analyzer.set_signals(progress_signal=self.progress, 
+                                       main_messenger=self.main_messenger, 
+                                       sub_messenger=self.sub_messenger, 
+                                       list_delivery=self.list_delivery)
+        self.single_scan = single_scan
+        self.folder_name = folder_name
         
     def run(self):
         try:
             self.song_analyzer.load_predictor()
-            self.song_analyzer.run_processor()
+            if not self.single_scan:
+                self.song_analyzer.run_processor()
+            else:
+                self.song_analyzer.run_single_shot(self.folder_name)
         finally:
             self.finished.emit()
 
@@ -138,8 +152,9 @@ class MainWindow(QMainWindow):
         self.song_count = self.song_analyzer.get_song_count()
         
         self.worker_thread = None
+        self.percent_processed = None
         
-        self.persistent_settings = self.file_manager.get_previous_settings()
+        self.persistent_settings = self.file_manager.get_previous_user_choices()
         self.settings_init()
             
         self.ui_init()
@@ -160,6 +175,7 @@ class MainWindow(QMainWindow):
         self.main_view.setModel(self.liststringmodel)
         self.main_view.setMinimumHeight(400)
         self.main_view.setEditTriggers(QListView.EditTrigger.NoEditTriggers)
+        self.main_view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         
         self.main_layout.addWidget(self.main_view, stretch=1)
         
@@ -186,47 +202,47 @@ class MainWindow(QMainWindow):
         else:
             self.check_adjust_bpm.setCheckState(Qt.CheckState.Unchecked)
             
-        self.check_vSurround = QCheckBox("Virtual Surround Sound")
-        if self.state_manager.virtualSurround == 2:
-            self.check_vSurround.setCheckState(Qt.CheckState.Checked)
-        else:
-            self.check_vSurround.setCheckState(Qt.CheckState.Unchecked)
+        # self.check_vSurround = QCheckBox("Virtual Surround Sound")
+        # if self.state_manager.virtualSurround == 2:
+        #     self.check_vSurround.setCheckState(Qt.CheckState.Checked)
+        # else:
+        #     self.check_vSurround.setCheckState(Qt.CheckState.Unchecked)
         
         self.main_layout.addLayout(checkbox_layout, stretch=1)
         checkbox_layout.addWidget(self.check_adjust_bpm, stretch=1, alignment=Qt.AlignmentFlag.AlignCenter|Qt.AlignmentFlag.AlignBottom)
-        checkbox_layout.addWidget(self.check_vSurround, stretch=1, alignment=Qt.AlignmentFlag.AlignCenter|Qt.AlignmentFlag.AlignBottom)
+        # checkbox_layout.addWidget(self.check_vSurround, stretch=1, alignment=Qt.AlignmentFlag.AlignCenter|Qt.AlignmentFlag.AlignBottom)
         
-        # Comboboxes
-        combobox_layout_1 = QHBoxLayout()
-        combobox_layout_2 = QHBoxLayout()
+        ### MAY NOT BE NEEDED DUE TO CALIBRATION TEST ###
+        # # Comboboxes
+        # combobox_layout_1 = QHBoxLayout()
+        # combobox_layout_2 = QHBoxLayout()
         
-        self.combo_label_1 = QLabel("Audio Device Connection")
-        self.combo_label_1.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.combo_audiodevice = QComboBox() 
-        self.combo_audiodevice.addItems(self.state_manager.speakerTypes)
-        self.combo_audiodevice.setCurrentText(self.state_manager.currentSpeakerType)
+        # self.combo_label_1 = QLabel("Audio Device Connection")
+        # self.combo_label_1.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        # self.combo_audiodevice = QComboBox() 
+        # self.combo_audiodevice.addItems(self.state_manager.speakerTypes)
+        # self.combo_audiodevice.setCurrentText(self.state_manager.currentSpeakerType)
         
-        self.combo_label_2 = QLabel("feels")
-        self.combo_label_2.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.combo_beatfeel = QComboBox() 
-        self.combo_beatfeel.addItems(self.state_manager.beatFeelings)
-        self.combo_beatfeel.setCurrentText(self.state_manager.currentBeatFeeling)
+        # self.combo_label_2 = QLabel("feels")
+        # self.combo_label_2.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        # self.combo_beatfeel = QComboBox() 
+        # self.combo_beatfeel.addItems(self.state_manager.beatFeelings)
+        # self.combo_beatfeel.setCurrentText(self.state_manager.currentBeatFeeling)
         
-        self.combo_label_3 = QLabel("Controller/Keyboard Connection")
-        self.combo_label_3.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.combo_controllertype = QComboBox()
-        self.combo_controllertype.addItems(self.state_manager.controllerTypes)
-        self.combo_controllertype.setCurrentText(self.state_manager.currentController)
+        # self.combo_label_3 = QLabel("Controller/Keyboard Connection")
+        # self.combo_label_3.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        # self.combo_controllertype = QComboBox()
+        # self.combo_controllertype.addItems(self.state_manager.controllerTypes)
+        # self.combo_controllertype.setCurrentText(self.state_manager.currentController)
 
-        
-        self.main_layout.addLayout(combobox_layout_1)
-        self.main_layout.addLayout(combobox_layout_2)
-        combobox_layout_1.addWidget(self.combo_label_1)
-        combobox_layout_1.addWidget(self.combo_audiodevice, stretch=1)
-        combobox_layout_1.addWidget(self.combo_label_2)
-        combobox_layout_1.addWidget(self.combo_beatfeel, stretch=1)
-        combobox_layout_1.addWidget(self.combo_label_3)
-        combobox_layout_1.addWidget(self.combo_controllertype, stretch=1)
+        # self.main_layout.addLayout(combobox_layout_1)
+        # self.main_layout.addLayout(combobox_layout_2)
+        # combobox_layout_1.addWidget(self.combo_label_1)
+        # combobox_layout_1.addWidget(self.combo_audiodevice, stretch=1)
+        # combobox_layout_1.addWidget(self.combo_label_2)
+        # combobox_layout_1.addWidget(self.combo_beatfeel, stretch=1)
+        # combobox_layout_1.addWidget(self.combo_label_3)
+        # combobox_layout_1.addWidget(self.combo_controllertype, stretch=1)
         
         self.progress_bar = QProgressBar()
         self.progress_bar.setMinimum(0)
@@ -234,20 +250,23 @@ class MainWindow(QMainWindow):
         self.progress_bar.setValue(0)
         
         self.main_layout.addWidget(self.progress_bar, Qt.AlignmentFlag.AlignCenter)
-        
+        # Buttons
         self.run_button = QPushButton()
         self.run_button.setText("Run")
+        self.bw_button = QPushButton()
+        self.bw_button.setText("Calibrate Offset")
         
         self.main_layout.addWidget(self.run_button, Qt.AlignmentFlag.AlignCenter)
+        self.main_layout.addWidget(self.bw_button, Qt.AlignmentFlag.AlignCenter)
         
         # Connections
-        # Buttons
         self.run_button.clicked.connect(self.run_button_action)
-        
+        self.bw_button.clicked.connect(self.open_beat_window)
+        self.main_view.customContextMenuRequested.connect(self.display_main_view_context)
         # Checkboxes
         checkboxes = self.main_widget.findChildren(QCheckBox)
         for checkbox in checkboxes:
-            checkbox.clicked.connect(self.update_comboboxes)
+            checkbox.clicked.connect(self.update_checkboxes)
             
         # Combos
         comboboxes = self.main_widget.findChildren(QComboBox)
@@ -257,56 +276,70 @@ class MainWindow(QMainWindow):
     def settings_init(self):
         if self.persistent_settings:
             self.state_manager.adjustBPM = self.persistent_settings["adjustBPM"]
-            self.state_manager.virtualSurround = self.persistent_settings["virtualSurround"]
-            self.state_manager.currentSpeakerType = self.persistent_settings["currentSpeakerType"]
-            self.state_manager.currentBeatFeeling = self.persistent_settings["currentBeatFeeling"]
-            self.state_manager.currentController = self.persistent_settings["currentController"]
-            self.state_manager.currentConfidenceThresh = self.persistent_settings["currentConfidenceThresh"]
+            # self.state_manager.virtualSurround = self.persistent_settings["virtualSurround"]
+            # self.state_manager.currentSpeakerType = self.persistent_settings["currentSpeakerType"]
+            # self.state_manager.currentBeatFeeling = self.persistent_settings["currentBeatFeeling"]
+            # self.state_manager.currentController = self.persistent_settings["currentController"]
+            # self.state_manager.currentConfidenceThresh = self.persistent_settings["currentConfidenceThresh"]
+            self.state_manager.globalOffset = self.persistent_settings["globalOffset"]
         
     def progress_action(self, signal):            
         self.percent_processed = int((signal / self.song_count)*100)
         self.progress_bar.setValue(self.percent_processed)
     
     def main_messenger_manager(self, signal):
+        self.message_label.clear()
         self.main_label.setText(signal)
     
     def sub_messenger_manager(self, signal):
+        self.message_label.clear()
         self.message_label.setText(signal)
     
     def list_manager(self, signal):
         self.liststringmodel = QStringListModel(signal)
         self.main_view.setModel(self.liststringmodel)
     
-    def run_button_action(self):
+    def run_button_action(self, single_scan: bool = False):
         """Launch the CPU‑heavy job in a worker thread."""
         if self.worker_thread and self.worker_thread.isRunning():
             return
 
         # Create the QThread + Worker pair
         self.worker_thread = QThread()
-        self.worker = Worker(self.song_analyzer)   # keep reference
+        if not single_scan:
+            self.worker = Worker(self.song_analyzer)   # keep reference
+        else:
+            self.worker = Worker(self.song_analyzer, True, self.liststringmodel.data(self.main_view.currentIndex(), Qt.ItemDataRole.DisplayRole))
         self.worker.moveToThread(self.worker_thread)
             
         # Connect signals & slots
         self.worker_thread.started.connect(self.worker.run)
-        self.worker.progress.connect(lambda a: self.progress_action(a))
+        if not single_scan:
+            self.worker.progress.connect(lambda a: self.progress_action(a))
         self.worker.sub_messenger.connect(lambda a: self.sub_messenger_manager(a))
         self.worker.main_messenger.connect(lambda a: self.main_messenger_manager(a))
         self.worker.list_delivery.connect(lambda a: self.list_manager(a))
         self.worker.finished.connect(self.on_worker_finished)
         self.worker.finished.connect(self.worker_thread.quit)
+        
         # Keep disabled #
         # self.worker.finished.connect(self.worker.deleteLater)
         # self.worker_thread.finished.connect(self.worker_thread.deleteLater)
+        
         # Disable elements
         self.disable_elements()
         self.worker_thread.start()
-        
+            
     def on_worker_finished(self):
         """Called *after* the background thread quits."""
         # Re‑enable elements
         self.enable_elements()
-        self.main_label.setText(f"{self.percent_processed}% of songs processed!")
+        if self.percent_processed:
+            self.main_label.setText(f"{self.percent_processed}% of songs processed!")
+            self.percent_processed = None
+        else:
+            self.main_label.setText("Idle")
+        
     
     def disable_elements(self):
         # Buttons
@@ -325,6 +358,7 @@ class MainWindow(QMainWindow):
         listviews = self.main_widget.findChildren(QListView)
         for list in listviews:
             list.setEnabled(False)
+            
         # Show Processing Elements
         self.message_label.setHidden(False)
         
@@ -348,25 +382,153 @@ class MainWindow(QMainWindow):
             
         # Hide Processing Elements
         self.message_label.setHidden(True)
+        
     # Connections
     def update_checkboxes(self):
         self.state_manager.adjustBPM = self.check_adjust_bpm.checkState().value
-        self.state_manager.virtualSurround = self.check_vSurround.checkState().value
+        # self.state_manager.virtualSurround = self.check_vSurround.checkState().value
         
     def update_comboboxes(self):
-        self.state_manager.currentSpeakerType = self.combo_audiodevice.currentText()
-        self.state_manager.currentBeatFeeling = self.combo_beatfeel.currentText()
-        self.state_manager.currentController = self.combo_controllertype.currentText()
-        # self.state_manager.currentConfidenceThresh = self.combo_precisionlevel.currentText()
-        # if self.state_manager.currentConfidenceThresh== "High":
-        #     self.combo_warning_1.setHidden(False)
-        #     self.combo_warning_1.setText(f"WARNING: Setting this to {self.state_manager.currentConfidenceThresh} will greatly increase processing time!")
-        # elif self.state_manager.currentConfidenceThresh == "Medium":
-        #     self.combo_warning_1.setHidden(False)
-        #     self.combo_warning_1.setText(f"Setting this to {self.state_manager.currentConfidenceThresh} is recommended.")
-        # else:
-        #     self.combo_warning_1.setHidden(True)
+        pass
+        # self.state_manager.currentSpeakerType = self.combo_audiodevice.currentText()
+        # self.state_manager.currentBeatFeeling = self.combo_beatfeel.currentText()
+        # self.state_manager.currentController = self.combo_controllertype.currentText()
+    
+    def display_main_view_context(self, pos: QPoint):
+        global_pos = self.main_view.viewport().mapToGlobal(pos) # type:ignore
+        menu = QMenu(self.main_view)
+        
+        a_delete = menu.addAction("Scan")
+        
+        selected = menu.exec(global_pos)
+        if selected == a_delete:
+            self.run_button_action(True)
+        
+    def open_beat_window(self):
+        beat_window = BeatOffsetTest(self.main_widget, state_manager=self.state_manager)
+        beat_window.show()
+        
+class BeatOffsetTest(QDialog):
+    '''
+    THIS IS EXTREMELY BETA AND PARTIALLY AI GENERATED.\n
+    I EDITED IT TO MAKE IT WORK FAST AND BE AN EXAMPLE TO BUILD OFF OF.\n
+    THIS WILL PROBABLY NOT REMAIN AS IS FOR THE FINAL BUILD.
+    '''
+    def __init__(self, parent=None, bpm=100, target_taps=30, state_manager: dm.MainWindowStateManager | None = None):
+        super().__init__(parent)
+        self.setWindowTitle("Beat Offset Test")
 
+        self.state_manager = state_manager
+        self.bpm = bpm
+        self.target_taps = target_taps
+        self.beat_interval_ns = 60_000_000_000 / bpm
+        self.offsets_ms = []
+        self.running = False
+
+        self.status_label = QLabel(f"Ready a sound will play at {bpm} bpm tap to the beat {target_taps} times to finish.\nPress 'space' or click the tap button." )
+        self.result_label = QLabel("")
+        self.start_button = QPushButton("Start")
+        self.tap_button = QPushButton("Tap")
+        self.tap_button.setEnabled(False)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(self.status_label)
+        layout.addWidget(self.tap_button)
+        layout.addWidget(self.result_label)
+        layout.addWidget(self.start_button)
+
+        self.start_button.clicked.connect(self.start_test)
+        self.tap_button.clicked.connect(self.record_tap)
+
+        # Load a short WAV click from the same folder as this script.
+        self.click = QSoundEffect(self)
+        self.click.setSource(
+            QUrl.fromLocalFile(".\\sounds\\BeatOffsetTest.wav")
+        )
+        self.click.setVolume(0.20)  # 0.0 to 1.0
+
+        self.clock = QElapsedTimer()
+
+        self.beat_timer = QTimer(self)
+        self.beat_timer.setTimerType(Qt.TimerType.PreciseTimer)
+        self.beat_timer.timeout.connect(self.play_beat)
+
+        self.last_tapped_beat = None
+
+    def start_test(self):
+        self.offsets_ms.clear()
+        self.running = True
+        self.last_tapped_beat = None
+    
+        self.start_button.setEnabled(False)
+        self.tap_button.setEnabled(True)
+        self.tap_button.setFocus()
+        self.result_label.clear()
+        self.status_label.setText("Listen to the beat and tap along.")
+
+        self.clock.start()
+        self.play_beat()
+        self.beat_timer.start(round(60_000 / self.bpm))
+        # self.end_timer.start(self.duration_seconds * 1000)
+
+    def play_beat(self):
+        if self.click.isLoaded():
+            self.click.play()
+
+    def record_tap(self):
+        if not self.running:
+            return
+                
+        elapsed_ns = self.clock.nsecsElapsed()
+        beat_number = round(elapsed_ns / self.beat_interval_ns)
+        
+        if beat_number == self.last_tapped_beat:
+            return
+
+        self.last_tapped_beat = beat_number
+        expected_ns = beat_number * self.beat_interval_ns
+        offset_ms = (elapsed_ns - expected_ns) / 1_000_000
+        self.offsets_ms.append(offset_ms)
+        
+        self.status_label.setText(
+            f"Tap recorded: {offset_ms:+.0f} ms\n"
+            f"{len(self.offsets_ms)} of {self.target_taps}"
+        )
+
+        if len(self.offsets_ms) >= self.target_taps:
+            self.finish_test()
+            
+    def keyPressEvent(self, a0):
+        if a0.key() == Qt.Key.Key_Space and self.running:
+            self.record_tap()
+            a0.accept()
+        else:
+            super().keyPressEvent(a0)
+
+    def finish_test(self):
+        self.running = False
+        self.beat_timer.stop()
+        self.tap_button.setEnabled(False)
+        self.start_button.setEnabled(True)
+
+        if not self.offsets_ms:
+            self.status_label.setText("Test finished - no taps were recorded.")
+            return
+
+        average_signed = sum(self.offsets_ms) / len(self.offsets_ms)
+        average_absolute = sum(abs(x) for x in self.offsets_ms) / len(self.offsets_ms)
+
+        self.status_label.setText(
+            f"Test finished - {len(self.offsets_ms)} taps recorded."
+        )
+        self.result_label.setText(
+            f"Average offset: {average_signed:+.0f} ms\n"
+            f"Average distance from beat: {average_absolute:.0f} ms"
+        )
+        
+        # Update the global offset
+        if self.state_manager != None:
+            self.state_manager.globalOffset = round(average_signed)
         
 if __name__ == "__main__":     
     app = QApplication(sys.argv)

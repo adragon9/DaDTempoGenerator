@@ -4,19 +4,21 @@
 
 ### Checkboxes
 
-- Adjust low bpm - This option will double the tempo of any song that falls under 90 bpm.
-- Virtual Surround Sound - This adds about 40ms to the beat offset to account for virtual surround sound latency
+- Adjust low bpm - This option will double the tempo of any song that falls under 95 bpm.
 
-### Comboboxes
+### Offset Calibration
 
-- Audio Device Connection - Select the type of connection your audio device has to your PC/Gaming Device
-- feels - Select if the punches in the game feel early, good, or late.
-- Controller/Keyboard Connection - Select the type of connection your input device has to your PC/Gaming Device
-- Confidence threshold for switching analysis methods - This combobox features Low, Medium, or High options. They directly impact at what threshold deeprhythm's confidence should be at before its tempo analysis is accepted. For example, if this is set to High deeprhythm must be no less than 90% confident for the song's tempo to not be re-evaluated by librosa.
+- Just click the offset calibration and either hit "spacebar" or click the "tap" button in time with the tone.
+  - It should be reasonably accurate but if there are any issues let me know.
 
 ### Buttons
 
 - Run - runs the analysis
+- Offset Calibration - opens the calibration window
+
+### Song list
+
+- Right click on any song and click scan to scan that individual song
 
 ## Info
 
@@ -34,4 +36,8 @@
 
 ### App Version
 
-- 1.0.0-beta
+- 1.1.1-beta
+
+### Possible issues
+
+- I forgot to hard save the calibrations after they are done, so if you do a calibration and don't scan a song it may not be saved. I will fix that in the next update.
