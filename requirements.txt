@@ -32,6 +32,7 @@ PyQt6==6.11.0
 PyQt6-Qt6==6.11.1
 PyQt6_sip==13.11.1
 pywin32-ctypes==0.2.3
+RapidFuzz==3.14.6
 requests==2.34.2
 scikit-learn==1.9.0
 scipy==1.18.0

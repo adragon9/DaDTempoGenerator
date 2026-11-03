@@ -1,4 +1,24 @@
-# Changelog
+# Changelogs
+
+## [1.1.2-beta] [11/3/26]
+
+- Tempo estimations tweaked
+  - Using priors now instead of just flat start bpms
+- Hop length now accounts for varying sample rates
+  - This should result in faster scanning and more accurate to similarly accurate guesses
+- Settings are now saved upon being changed
+- The viewer now uses the name that is in the Meta.json for the displayed song name
+- Added tool tips so you can see where that song is located on you computer
+- Added a fresh scan checkbox so that you can rescan all songs on demand
+- UI Refinements
+- Updated requirements
+- Added a known issues document
+- Updated some comments and cleaned up the code a bit
+- Fixed being able to interact with the main window while the beat offset calibration window was open
+- Added the ability to open the song folder from the context menu
+- Added a visualizer to the beat offset calibration menu
+- Updated beat calibration should be more consistent
+- Cleaned up imports
 
 ## [1.1.1-beta] [11/1/26]
 

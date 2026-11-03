@@ -2,7 +2,9 @@
 import os
 import deeprhythm_custom, librosa
 import numpy as np
-from scipy import signal
+import time
+import statistics
+
 # Class imports
 from pathlib import Path
 from PyQt6.QtCore import (
@@ -10,12 +12,15 @@ from PyQt6.QtCore import (
 )
 from typing import Literal
 from bisect import bisect_left
+from collections import defaultdict
+from scipy import signal
+from scipy.stats import lognorm
+
 # Custom Imports
 import helpers.DebugHelper as dh
 import scripts.FileManagement as fm
 import scripts.DataManagement as dm
-import time
-import statistics
+
 
 class SongAnalyzer():
     def __init__(self, file_manager: fm.FileManager, main_window_states: dm.MainWindowStateManager, progress_signal: pyqtBoundSignal | None = None,
@@ -46,7 +51,8 @@ class SongAnalyzer():
         self.song_dirs = []
         try:
             for folder in os.scandir(imported_song_path):
-                self.song_names.append(folder.name)
+                data = self.file_manager._load_json_utf16(Path(os.path.join(folder.path, "Meta.json")))
+                self.song_names.append(data["songName"])
                 self.song_dirs.append(folder.path)
         except Exception as e:
             self.error_logger.write(f"Error {e} while attempting to scan {imported_song_path}")
@@ -104,40 +110,28 @@ class SongAnalyzer():
         self.prev_settings = self.file_manager.get_previous_user_choices()
         rescan_beat_offset = False
         rescan_tempo = False
-
-        # last_feeling = None
-        # last_speakerType = None
-        # last_precision = None
-        # last_controller = None
+                
         last_adjustBPM = None
-        # last_virtualSurround = None
         last_global_offset = None
 
         try:
             if self.prev_settings:
-                # last_feeling = self.prev_settings["currentBeatFeeling"]
-                # last_speakerType = self.prev_settings["currentSpeakerType"]
-                # last_precision = self.prev_settings["currentConfidenceThresh"]
-                # last_controller = self.prev_settings["currentController"]
                 last_adjustBPM = self.prev_settings["adjustBPM"]
-                # last_virtualSurround = self.prev_settings["virtualSurround"]
-                last_global_offset = self.prev_settings["globalOffset"]
+                last_global_offset = self.prev_settings["globalOffset"]   
         except Exception as e:
             self.error_logger.write(f"Error {e} in _check_rescan")
-        
-        # if self.main_window_states.currentBeatFeeling != last_feeling:
-        #     rescan_beat_offset = True
-        # elif self.main_window_states.currentController != last_controller:
-        #     rescan_beat_offset = True
-        # elif self.main_window_states.currentSpeakerType != last_speakerType:
-        #     rescan_beat_offset = True
-        # elif self.main_window_states.virtualSurround != last_virtualSurround:
-        #     rescan_beat_offset = True
-        
-        if self.main_window_states.globalOffset != last_global_offset:
+                
+        beatOffset_vars = [
+            (self.main_window_states.globalOffset != last_global_offset)
+        ]
+        if any(beatOffset_vars):
             rescan_beat_offset = True
-            
-        if self.main_window_states.adjustBPM != last_adjustBPM:
+        
+        rescan_vars = [
+            (self.main_window_states.adjustBPM != last_adjustBPM),
+            self.main_window_states.freshScan
+        ]
+        if any(rescan_vars):
             rescan_tempo = True
             
         return rescan_tempo, rescan_beat_offset
@@ -145,78 +139,6 @@ class SongAnalyzer():
     # Song analysis            
     def _beat_offset(self, audio_file, tempo: int | float = 120):
         offset_ms = 0
-        # if self.main_window_states:
-        #     if self.main_window_states.currentBeatFeeling.lower() == "good":
-        #         match self.main_window_states.currentSpeakerType:
-        #             case "Wired Headphones":
-        #                 offset_ms = 5
-        #             case "Bluetooth Headphones":
-        #                 offset_ms = 180
-        #             case "Desktop/PC Speakers":
-        #                 offset_ms = 20
-        #             case "TV via HDMI":
-        #                 offset_ms = 55
-        #             case "Steam Deck":
-        #                 offset_ms = 8
-        #             case "Wireless 2.4GHz":
-        #                 offset_ms = 12
-        #             case "Custom/Unkown":
-        #                 offset_ms = 30
-        #             case _:
-        #                 offset_ms = 0
-                    
-        #     elif self.main_window_states.currentBeatFeeling.lower() == "early":
-        #         match self.main_window_states.currentSpeakerType:
-        #             case "Wired Headphones":
-        #                 offset_ms = 20
-        #             case "Bluetooth Headphones":
-        #                 offset_ms = 195
-        #             case "Desktop/PC Speakers":
-        #                 offset_ms = 35
-        #             case "TV via HDMI":
-        #                 offset_ms = 70
-        #             case "Steam Deck":
-        #                 offset_ms = 23
-        #             case "Wireless 2.4GHz":
-        #                 offset_ms = 27
-        #             case "Custom/Unkown":
-        #                 offset_ms = 45
-        #             case _:
-        #                 offset_ms = 0
-                    
-        #     elif self.main_window_states.currentBeatFeeling.lower() == "late":
-        #         match self.main_window_states.currentSpeakerType:
-        #             case "Wired Headphones":
-        #                 offset_ms = -15
-        #             case "Bluetooth Headphones":
-        #                 offset_ms = 160
-        #             case "Desktop/PC Speakers":
-        #                 offset_ms = 0
-        #             case "TV via HDMI":
-        #                 offset_ms = 35
-        #             case "Steam Deck":
-        #                 offset_ms = -12
-        #             case "Wireless 2.4GHz":
-        #                 offset_ms = -8
-        #             case "Custom/Unkown":
-        #                 offset_ms = 10
-        #             case _:
-        #                 offset_ms = 0
-                        
-        #     if self.main_window_states.currentController.lower() != "wired":
-        #         match self.main_window_states.currentController:
-        #             case "Wireless 2.4Ghz":
-        #                 offset_ms += 4
-        #             case "Wireless Bluetooth":
-        #                 offset_ms += 16
-        #             case "Ignore":
-        #                 pass
-        #             case _:
-        #                 pass
-                        
-        #     if self.main_window_states.virtualSurround == 2:
-        #         offset_ms += 40
-
         offset_ms += self.main_window_states.globalOffset
             
         self._emit_signal('sm', f"Beat offset measurement starting at: {offset_ms}ms")
@@ -268,17 +190,16 @@ class SongAnalyzer():
             return item
         
     def _create_envelope(self, y, sr, hop_length: int):
-        start = time.perf_counter()
         self._emit_signal('sm', f"Creating envelope with hop length of: {hop_length}")
         
         # Remove low frequency rumbles
-        sos = signal.butter(4, 35, btype='highpass',fs=sr,output="sos")
+        sos = signal.butter(4, 35, btype='highpass', fs=sr, output="sos")
         y_filtered = signal.sosfiltfilt(sos, y)
         
         harmonics, percussion = librosa.effects.hpss(y=y_filtered, hop_length=hop_length)
         # Full song pass
         self._emit_signal('sm', f"Creating full song envelope.")
-        onset_env = librosa.onset.onset_strength(y=y, sr=sr, hop_length=hop_length)
+        onset_env = librosa.onset.onset_strength(y=y_filtered, sr=sr, hop_length=hop_length)
                 
         # percussion pass
         self._emit_signal('sm', f"Creating percussion envelope.")
@@ -287,9 +208,7 @@ class SongAnalyzer():
         # harmonics pass
         self._emit_signal('sm', f"Creating harmonics envelope.")
         onset_env_h = librosa.onset.onset_strength(y=harmonics, sr=sr, hop_length=hop_length)
-        
-        # end = time.perf_counter() # Debug only
-        
+                
         return onset_env, onset_env_p, onset_env_h
     
     def _closest_to_guess(self, tempos: list[int|float], guess: int|float) -> int | float:
@@ -309,32 +228,54 @@ class SongAnalyzer():
         
     # Main tempo retrieval
     def _get_tempo(self, audio_path, model: deeprhythm_custom.DeepRhythmPredictor):
-        start = time.perf_counter()
-        confidence = 0.0 # Currently not used, legacy var
+        confidence = 0.0
         tempo = 0
-        
         self._emit_signal('sm', f"Estimating tempo...")
         
         # initial guess
-        tempo, confidence = model.predict(audio_path, include_confidence=True) # type: ignore
-        guess = tempo
+        tempo_guesses, confidences = model.predict_per_frame(audio_path, include_confidence=True)
+        pairs = [(key, value) for key, value in zip(tempo_guesses, confidences)] # type: ignore
+        pairs = sorted(pairs, key=lambda p: p[1])
+        confidences_by_guess = defaultdict(list)
         
-        if confidence < .9:
+        for guess, conf in pairs:
+            confidences_by_guess[guess].append(conf)
+            
+        averages = {
+            guess: sum(confs) / len(confs)
+            for guess, confs in confidences_by_guess.items()
+        }
+        guess, confidence = (pairs[-1][0], averages[pairs[-1][0]])
+        
+        if confidence < .8:
+            guess, confidence = max(averages.items(), key=lambda x: x[1])
+                    
+        if confidence < .95:             
             # Refine estimation
             y, sr = librosa.load(audio_path, sr = None, mono=True)
             y, _ = librosa.effects.trim(y, top_db=30)
-            hop_length = 512
+            hop_length = round(sr * 512 / (sr / 2))
             onset_env, onset_env_p, onset_env_h = self._create_envelope(sr=sr, y=y, hop_length=hop_length)
             
+            # generate priors tightens the range based on confidence
+            if confidence < .5:
+                prior = lognorm(s=.2, scale=guess)
+            elif .5 < confidence < .8:
+                prior = lognorm(s=.08, scale=guess)
+            elif confidence >= .8:
+                prior = lognorm(s=.04, scale=guess)
+            else:
+                prior = lognorm(s=2, scale=120)
+                
             # Pass 1: Full
             self._emit_signal('sm', f"Pass 1: Full track")
-            tempo_full, _ = librosa.beat.beat_track(onset_envelope=onset_env, hop_length=hop_length, start_bpm=guess)
+            tempo_full, _ = librosa.beat.beat_track(y=y, sr=sr, onset_envelope=onset_env, hop_length=hop_length, prior=prior)# type: ignore
             # Pass 2: Percussion
             self._emit_signal('sm', f"Pass 2: Percussion")
-            tempo_p, _ = librosa.beat.beat_track(onset_envelope=onset_env_p, hop_length=hop_length, start_bpm=guess)
+            tempo_p, _ = librosa.beat.beat_track(y=y, sr=sr, onset_envelope=onset_env_p, hop_length=hop_length, prior=prior)# type: ignore
             # Pass 3: Harmonics
             self._emit_signal('sm', f"Pass 3: Harmonics")
-            tempo_h, _ = librosa.beat.beat_track(onset_envelope=onset_env_h, hop_length=hop_length, start_bpm=guess)
+            tempo_h, _ = librosa.beat.beat_track(y=y, sr=sr, onset_envelope=onset_env_h, hop_length=hop_length, prior=prior)# type: ignore
             
             tempos = [self.list_to_num(tempo_full), self.list_to_num(tempo_p), self.list_to_num(tempo_h)]
             tempo = statistics.multimode(tempos)
@@ -346,17 +287,18 @@ class SongAnalyzer():
             # Emergency estimation in case beat_track fails
             if not tempo > 0 :
                 self._emit_signal('sm', f"Beat track failure, attempting feature tempo estimation.")
-                tempo = librosa.feature.tempo(y=y,sr=sr,hop_length=hop_length,start_bpm=guess)
+                tempo = librosa.feature.tempo(y=y,sr=sr,hop_length=hop_length,prior=prior) 
                 
             confidence = '-' # I am not confident easy way to solve that, remove confidence.
-            
+        else:
+            tempo = guess
+
         tempo = self.list_to_num(tempo) # Convert from a list obj to a number
         
         self._emit_signal('sm', f"Tempo estimate: {tempo}")
         beat_offset = self._beat_offset(audio_file=audio_path, tempo=tempo)
         
         self._emit_signal('sm', f"Tempo estimate: {tempo}\nBeat Offset: {beat_offset}\nWrapping up...")
-        end = time.perf_counter()
         return tempo, confidence, beat_offset
     
     # Main
@@ -364,7 +306,7 @@ class SongAnalyzer():
         scanned_song = {}
         self.list_delivery.emit(self.song_names)
         for i, path in enumerate(self.song_dirs):
-            self._emit_signal("mm", f"{self.song_names[i]}")
+            self._emit_signal("mm", f"{self.song_dirs[i]}")
             
             json_file = None
             imported_song = None
@@ -465,6 +407,7 @@ class SongAnalyzer():
                     else:
                         self.file_manager.add_scanned_item(self.song_names[i], song_data)
             self._emit_signal('ps', i+1)
+        self.main_window_states.freshScan = 0
         self.file_manager.save_state(main_window_states=self.main_window_states)
         
     def run_single_shot(self, folder_name):

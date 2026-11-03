@@ -112,7 +112,8 @@ class FileManager():
     def add_scanned_item(self, obj_name: str, obj: dict):
         if not os.path.exists(self.__scanned_path__):
             scanned_songs = {
-                "songs":{}
+                "songs":{},
+                "user_choices":{}
             }
             self._dump_json_as_utf8(self.__scanned_path__, scanned_songs)
         
@@ -126,19 +127,25 @@ class FileManager():
         self._dump_json_as_utf8(self.__scanned_path__, data)
             
     def save_state(self, main_window_states: dm.MainWindowStateManager|None):
+        if not os.path.exists(self.__scanned_path__):
+            scanned_songs = {
+                "songs":{},
+                "user_choices":{}
+            }
+            self._dump_json_as_utf8(self.__scanned_path__, scanned_songs)
         if main_window_states:
             data = self._load_json_utf16(self.__scanned_path__)
             
             user_choice_dict = asdict(main_window_states)
-            print(user_choice_dict)
+            
+            # This is for if I add combo boxes again
             user_choice_dict_scrubbed = {}
             for key in user_choice_dict:
                 if type(user_choice_dict[key]) == list:
                     continue
                 else:
                     user_choice_dict_scrubbed[key] = user_choice_dict[key]
-            
-            print(user_choice_dict_scrubbed)
+                    
             data["user_choices"] = user_choice_dict_scrubbed
             
             with open(self.__scanned_path__, 'w') as file:
