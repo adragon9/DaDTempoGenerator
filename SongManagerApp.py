@@ -22,7 +22,7 @@ from PyQt6.QtGui import (
 from PyQt6.QtMultimedia import (
     QSoundEffect
 )
-
+from dataclasses import asdict
 # Custom class imports
 import scripts.FileManagement as fm
 import scripts.SongAnalyzer as sa
@@ -70,25 +70,33 @@ class Worker(QObject):
     progress = pyqtSignal(int)
     main_messenger = pyqtSignal(str)
     sub_messenger = pyqtSignal(str)
-    list_delivery = pyqtSignal(list)
     
-    def __init__(self, song_analyzer: sa.SongAnalyzer, single_scan: bool = False, folder_name: str|None=None):
+    def __init__(self, song_analyzer: sa.SongAnalyzer, single_scan: bool = False, folder_path: str|None=None,
+                 clear_events: bool = False):
         super().__init__()
         self.song_analyzer = song_analyzer
         self.song_analyzer.set_signals(progress_signal=self.progress, 
                                        main_messenger=self.main_messenger, 
-                                       sub_messenger=self.sub_messenger, 
-                                       list_delivery=self.list_delivery)
+                                       sub_messenger=self.sub_messenger)
+        # Types of work
         self.single_scan = single_scan
-        self.folder_name = folder_name
+        self.clear_events = clear_events
+        
+        # Folder to work on
+        self.folder_path = folder_path
         
     def run(self):
         try:
             self.song_analyzer.load_predictor()
-            if not self.single_scan:
-                self.song_analyzer.run_processor()
+            if self.single_scan:
+                self.song_analyzer.run_single_shot(self.folder_path)
+            elif self.clear_events:
+                self.song_analyzer.clear_events(self.folder_path)
             else:
-                self.song_analyzer.run_single_shot(self.folder_name)
+                self.song_analyzer.run_processor()
+        except Exception as e:
+            log_writer = dh.LogManager("WorkerProblemLog.txt")
+            log_writer.write(f"Error: {e} in worker thread.")
         finally:
             self.finished.emit()
 
@@ -210,13 +218,19 @@ class MainWindow(QMainWindow):
         self.song_names = self.song_analyzer.get_song_names()
         self.song_paths = self.song_analyzer.get_song_paths()
         self.paired_path_and_names = zip(self.song_names, self.song_paths)
-        self.paired_path_and_names = sorted(self.paired_path_and_names, key=lambda x: x[0])
+        self.paired_path_and_names = sorted(self.paired_path_and_names, key=lambda x: x[0].lower())
         self.song_count = self.song_analyzer.get_song_count()
         
         self.worker_thread = None
         self.percent_processed = None
-        
         self.persistent_settings = self.file_manager.get_previous_user_choices()
+        
+        # Verify the persistent settings matches the program data.
+        if self.persistent_settings.keys() != asdict(self.state_manager).keys():
+            missing_keys = [key for key in asdict(self.state_manager) if key not in self.persistent_settings.keys()]
+            for key in missing_keys:
+                self.persistent_settings[key]=''
+            
         self.settings_init()
             
         self.ui_init()
@@ -234,7 +248,7 @@ class MainWindow(QMainWindow):
         default = self.song_analyzer.get_song_names()
         self.main_view = PositionedListView()
         self.list_view_model = QStandardItemModel(self.main_view)
-        self.update_list_model(default)
+        self.update_list_model()
         self.main_view.setEditTriggers(QListView.EditTrigger.NoEditTriggers)
         self.main_view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.main_view.setAlternatingRowColors(True)
@@ -259,12 +273,14 @@ class MainWindow(QMainWindow):
         checkbox_layout = QHBoxLayout()
         
         self.check_adjust_bpm = QCheckBox("Adjust Low BPM")
+        self.check_gen_event_track= QCheckBox("Auto Generate Event Track")
         self.check_fresh_run = QCheckBox("Fresh Scan")
         
         # Add to layout        
         self.main_layout.addLayout(checkbox_layout, stretch=1)
-        checkbox_layout.addWidget(self.check_adjust_bpm, stretch=1, alignment=Qt.AlignmentFlag.AlignCenter|Qt.AlignmentFlag.AlignBottom)
-        checkbox_layout.addWidget(self.check_fresh_run, stretch=1, alignment=Qt.AlignmentFlag.AlignCenter|Qt.AlignmentFlag.AlignBottom)
+        checkbox_layout.addWidget(self.check_adjust_bpm, stretch=1, alignment=Qt.AlignmentFlag.AlignHCenter)
+        checkbox_layout.addWidget(self.check_gen_event_track, stretch=1, alignment=Qt.AlignmentFlag.AlignHCenter)
+        checkbox_layout.addWidget(self.check_fresh_run, stretch=1, alignment=Qt.AlignmentFlag.AlignHCenter)
                         
         self.progress_bar = QProgressBar()
         self.progress_bar.setMinimum(0)
@@ -311,6 +327,11 @@ class MainWindow(QMainWindow):
         else:
             self.check_adjust_bpm.setCheckState(Qt.CheckState.Unchecked)
 
+        if self.state_manager.autoGenEventTrack == 2:
+            self.check_gen_event_track.setCheckState(Qt.CheckState.Checked)
+        else:
+            self.check_gen_event_track.setCheckState(Qt.CheckState.Unchecked)
+        
         if self.state_manager.freshScan == 2:
             self.check_fresh_run.setCheckState(Qt.CheckState.Checked)
         else:
@@ -318,14 +339,16 @@ class MainWindow(QMainWindow):
         
     def settings_init(self):
         if self.persistent_settings:
-            print(self.persistent_settings)
+            # Repair unknown vars
+            if self.persistent_settings["globalOffset"] == '':
+                self.persistent_settings["globalOffset"] = 0
+                
             self.state_manager.adjustBPM = self.persistent_settings["adjustBPM"]
             self.state_manager.globalOffset = self.persistent_settings["globalOffset"]
             self.state_manager.freshScan = self.persistent_settings["freshScan"]
-            print(self.state_manager)
+            self.state_manager.autoGenEventTrack = self.persistent_settings["autoGenEventTrack"]
             
-    def update_list_model(self, strings: list):
-        strings.sort()
+    def update_list_model(self):
         for name, path in self.paired_path_and_names:
             item = QStandardItem(name)
             item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -346,20 +369,35 @@ class MainWindow(QMainWindow):
         self.message_label.clear()
         self.message_label.setText(signal)
     
-    def list_manager(self, signal):
-        self.update_list_model(signal)
-    
-    def run_button_action(self, single_scan: bool = False):
+    def run_button_action(self, single_scan: bool = False, clear_events: bool = False):
         """Launch the CPU‑heavy job in a worker thread."""
         if self.worker_thread and self.worker_thread.isRunning():
             return
 
         # Create the QThread + Worker pair
         self.worker_thread = QThread()
-        if not single_scan:
-            self.worker = Worker(self.song_analyzer)   # keep reference
+        
+        # used to get the folder path for context menu actions
+        def get_folder_path():
+            folder_path=None
+            for n, p in self.paired_path_and_names:
+                if n == self.list_view_model.data(self.main_view.currentIndex(), Qt.ItemDataRole.DisplayRole):
+                    folder_path = p
+                    return folder_path
+            
+        if single_scan:
+            folder_path = get_folder_path()
+            if not folder_path:
+                return 
+            self.worker = Worker(self.song_analyzer, single_scan=True, folder_path=folder_path)
+        elif clear_events:
+            folder_path = get_folder_path()
+            if not folder_path:
+                return 
+            self.worker = Worker(self.song_analyzer, clear_events=True, folder_path=folder_path)
         else:
-            self.worker = Worker(self.song_analyzer, True, self.list_view_model.data(self.main_view.currentIndex(), Qt.ItemDataRole.DisplayRole))
+            self.worker = Worker(self.song_analyzer)   # keep reference
+            
         self.worker.moveToThread(self.worker_thread)
             
         # Connect signals & slots
@@ -368,7 +406,6 @@ class MainWindow(QMainWindow):
             self.worker.progress.connect(lambda a: self.progress_action(a))
         self.worker.sub_messenger.connect(lambda a: self.sub_messenger_manager(a))
         self.worker.main_messenger.connect(lambda a: self.main_messenger_manager(a))
-        self.worker.list_delivery.connect(lambda a: self.list_manager(a))
         self.worker.finished.connect(self.on_worker_finished)
         self.worker.finished.connect(self.worker_thread.quit)
         
@@ -443,8 +480,8 @@ class MainWindow(QMainWindow):
     def update_checkboxes(self):
         self.state_manager.adjustBPM = self.check_adjust_bpm.checkState().value
         self.state_manager.freshScan = self.check_fresh_run.checkState().value
+        self.state_manager.autoGenEventTrack = self.check_gen_event_track.checkState().value
         self.file_manager.save_state(self.state_manager)
-        # self.state_manager.virtualSurround = self.check_vSurround.checkState().value
         
     def update_comboboxes(self):
         pass
@@ -463,7 +500,7 @@ class MainWindow(QMainWindow):
                            """)
         
         def scan_action_wrapper():
-            self.run_button_action(True)
+            self.run_button_action(single_scan=True)
             menu.close()
             
         def open_folder_action_wrapper():
@@ -472,9 +509,14 @@ class MainWindow(QMainWindow):
                     os.startfile(path)
                     break
             menu.close()
-                
+        
+        def clear_events_action_wrapper():
+            self.run_button_action(clear_events=True)                    
+            menu.close()
+        
         a_scan = QWidgetAction(menu)
         a_open_folder = QWidgetAction(menu)
+        a_clear_events = QWidgetAction(menu)
         a_close_menu = QWidgetAction(menu)
         
         button_stylesheet = """
@@ -513,19 +555,25 @@ class MainWindow(QMainWindow):
         button_a_open_folder = QPushButton("Open in Explorer")
         button_a_open_folder.setStyleSheet(button_stylesheet)
         
+        button_a_clear_events = QPushButton("Clear Song Events")
+        button_a_clear_events.setStyleSheet(button_stylesheet)
+
         button_a_close_menu = QPushButton("Close")
         button_a_close_menu.setStyleSheet(close_button_stylesheet)
         
         a_scan.setDefaultWidget(button_a_scan)
         a_open_folder.setDefaultWidget(button_a_open_folder)
+        a_clear_events.setDefaultWidget(button_a_clear_events)
         a_close_menu.setDefaultWidget(button_a_close_menu)
         
         button_a_scan.clicked.connect(scan_action_wrapper)
         button_a_open_folder.clicked.connect(open_folder_action_wrapper)
+        button_a_clear_events.clicked.connect(clear_events_action_wrapper)
         button_a_close_menu.clicked.connect(menu.close)
         
         menu.addAction(a_scan)
         menu.addAction(a_open_folder)
+        menu.addAction(a_clear_events)
         menu.addAction(a_close_menu)
         
         selected = menu.exec(global_pos)

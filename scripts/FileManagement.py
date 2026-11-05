@@ -30,13 +30,14 @@ class FileManager():
 
         return json.loads(text)
  
-    def _dump_json_as_utf8(self, path: Path, data):
+    def _dump_json_as_utf8(self, path: Path, data: dict):
         text = json.dumps(data, indent=4, ensure_ascii=False)
         path.write_text(text, encoding="utf-8")
         
     def _create_settings(self):
         with open(self.__settings_path__, 'w', encoding='utf-8') as file:
             default_settings = {
+                "version":"1.1.4-beta",
                 "paths": {
                     "DaDImportedSongsDir": "~\\AppData\\Local\\Pagoda\\Saved\\ImportedSongs",
                     "data":".\\data",
@@ -85,11 +86,11 @@ class FileManager():
         data = self._load_json_utf16(self.__settings_path__)
         return Path(os.path.join(self.__data_path__, data["files"]["scanned_songs"])).resolve()
     
-    def get_previous_user_choices(self):
+    def get_previous_user_choices(self)->dict:
         try:
             return self._load_json_utf16(self.__scanned_path__)["user_choices"]
         except Exception as e:
-            return None
+            return {}
     
     def check_scanned_song(self, name):
         scanned_songs = {
@@ -152,3 +153,4 @@ class FileManager():
                 json.dump(data, file, indent=4)
         else:
             return None
+        

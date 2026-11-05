@@ -1,5 +1,22 @@
 # Changelogs
 
+## [1.1.4-beta] [11/5/26]
+
+- Code refactoring
+- Bugfixes
+- Further refinements on tempo estimation
+- Added the ability to clear events for a song from the context menu
+- Added logging that should catch problems stemming from the worker thread
+
+## [1.1.3-beta] [11/4/26]
+
+- updated stylesheets
+- fixed a bug where the scan might have been occuring twice per song
+- added support for generating event tracks automatically WIP
+- fixed an issue where building the songlist quit early on error which lead to unscanned songs
+- Added some safeguards to prevent duplicate song entries from appearing
+- added additional tempo estimation passes to try to increase accuracy
+
 ## [1.1.2-beta] [11/3/26]
 
 - Tempo estimations tweaked

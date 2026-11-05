@@ -4,6 +4,8 @@ import deeprhythm_custom, librosa
 import numpy as np
 import time
 import statistics
+import secrets
+import math
 
 # Class imports
 from pathlib import Path
@@ -15,7 +17,8 @@ from bisect import bisect_left
 from collections import defaultdict
 from scipy import signal
 from scipy.stats import lognorm
-
+from scipy.ndimage import uniform_filter1d, gaussian_filter1d
+from scipy.signal import find_peaks
 # Custom Imports
 import helpers.DebugHelper as dh
 import scripts.FileManagement as fm
@@ -35,6 +38,8 @@ class SongAnalyzer():
         self.progress_signal = progress_signal
         self.main_messenger = main_messenger
         self.sub_messenger = sub_messenger
+        self.json_file = None
+        self.audio_file = None
 
     # Prep functions        
     def build_songlist(self, imported_song_path: str|Path|os.DirEntry):
@@ -49,16 +54,30 @@ class SongAnalyzer():
                 
         self.song_names = []
         self.song_dirs = []
-        try:
-            for folder in os.scandir(imported_song_path):
+        for folder in os.scandir(imported_song_path):
+            try:
                 data = self.file_manager._load_json_utf16(Path(os.path.join(folder.path, "Meta.json")))
                 self.song_names.append(data["songName"])
                 self.song_dirs.append(folder.path)
-        except Exception as e:
-            self.error_logger.write(f"Error {e} while attempting to scan {imported_song_path}")
-
+            except FileNotFoundError as e:
+                self.error_logger.write(f"The folder located at {folder} is missing its 'Meta.json' file!")
+        
+        pairs = zip(self.song_names, self.song_dirs)
+        pairs = list(dict.fromkeys(pairs))
+        
+        # Clear old lists before rebuild
+        self.song_names.clear()
+        self.song_dirs.clear()
+        for name, path in pairs:
+            self.song_names.append(name)
+            self.song_dirs.append(path)
+            
+        # Ensure no duplicates
+        self.song_names = list(dict.fromkeys(self.song_names))
+        self.song_dirs = list(dict.fromkeys(self.song_dirs))
+        
     def load_predictor(self):
-        self._emit_signal('mm', "Loading prediction model...")
+        self._emit_signal('sm', "Loading deeprhythm model.")
         self.model.load_model() 
     
     # Signal management
@@ -67,7 +86,6 @@ class SongAnalyzer():
                     progress_signal: pyqtBoundSignal,
                     main_messenger: pyqtBoundSignal,
                     sub_messenger: pyqtBoundSignal,
-                    list_delivery: pyqtBoundSignal
                 ):
         """
         Need to switch to passing in a list or dict of bound signals
@@ -76,7 +94,6 @@ class SongAnalyzer():
         self.progress_signal = progress_signal
         self.main_messenger = main_messenger
         self.sub_messenger = sub_messenger
-        self.list_delivery = list_delivery
 
     # Emits progress signal code
     def _emit_signal(self, signal_code: Literal["ps","mm","sm"], message: str | int = ""):
@@ -192,18 +209,14 @@ class SongAnalyzer():
     def _create_envelope(self, y, sr, hop_length: int):
         self._emit_signal('sm', f"Creating envelope with hop length of: {hop_length}")
         
-        # Remove low frequency rumbles
-        sos = signal.butter(4, 35, btype='highpass', fs=sr, output="sos")
-        y_filtered = signal.sosfiltfilt(sos, y)
-        
-        harmonics, percussion = librosa.effects.hpss(y=y_filtered, hop_length=hop_length)
+        harmonics, percussion = librosa.effects.hpss(y=y, hop_length=hop_length)
         # Full song pass
         self._emit_signal('sm', f"Creating full song envelope.")
-        onset_env = librosa.onset.onset_strength(y=y_filtered, sr=sr, hop_length=hop_length)
+        onset_env = librosa.onset.onset_strength(y=y, sr=sr, hop_length=hop_length)
                 
         # percussion pass
         self._emit_signal('sm', f"Creating percussion envelope.")
-        onset_env_p = librosa.onset.onset_strength(y=percussion, sr=sr, hop_length=hop_length)
+        onset_env_p = librosa.onset.onset_strength(y=percussion,  sr=sr, hop_length=hop_length)
         
         # harmonics pass
         self._emit_signal('sm', f"Creating harmonics envelope.")
@@ -211,7 +224,7 @@ class SongAnalyzer():
                 
         return onset_env, onset_env_p, onset_env_h
     
-    def _closest_to_guess(self, tempos: list[int|float], guess: int|float) -> int | float:
+    def _get_closest_val(self, tempos: list[int|float], guess: int|float) -> int | float:
         tempos.sort()
         pos = bisect_left(tempos, guess)
         if pos == 0:
@@ -225,242 +238,428 @@ class SongAnalyzer():
             return after
         else:
             return before
-        
-    # Main tempo retrieval
-    def _get_tempo(self, audio_path, model: deeprhythm_custom.DeepRhythmPredictor):
-        confidence = 0.0
-        tempo = 0
-        self._emit_signal('sm', f"Estimating tempo...")
-        
-        # initial guess
-        tempo_guesses, confidences = model.predict_per_frame(audio_path, include_confidence=True)
-        pairs = [(key, value) for key, value in zip(tempo_guesses, confidences)] # type: ignore
-        pairs = sorted(pairs, key=lambda p: p[1])
-        confidences_by_guess = defaultdict(list)
-        
-        for guess, conf in pairs:
-            confidences_by_guess[guess].append(conf)
+     
+    # Event management
+    def _generate_trackID(self) -> str:
+        '''Generates trackInstanceId for the event manager'''
+        # The more examples I create the better the generator gets
+        examples = [
+            "7E575FD94083803BF8477D81E7A3D570",
+            "7CAB92814FB8F49DDFBE6485F8422711",
+            "1871A2954BEB16B28B6ADE940F6EB289",
+            "DFD3439B4EC23D5461E13682B4A20523",
+            "1B18233E418ADE043BFAF1945AAD00A8",
+            "389E6A454094D231EF1588A72C534845",
+            "A7AC521C4C0C32A0D295ACAB67D630D4",
+            "32B551404B4D3EB42638F5B7FD4C9584",
+            "E932FB01432BA545B45A6E97A160614C",
             
-        averages = {
-            guess: sum(confs) / len(confs)
-            for guess, confs in confidences_by_guess.items()
-        }
-        guess, confidence = (pairs[-1][0], averages[pairs[-1][0]])
+        ]
         
-        if confidence < .8:
-            guess, confidence = max(averages.items(), key=lambda x: x[1])
+        # Create a library of letters to use in the generator
+        alphabet_library = set()
+        number_library = set()
+        for example in examples:
+            for digit in example:
+                if digit.isalpha():
+                    alphabet_library.add(digit)
+                else:
+                    number_library.add(digit)
                     
-        if confidence < .95:             
-            # Refine estimation
-            y, sr = librosa.load(audio_path, sr = None, mono=True)
-            y, _ = librosa.effects.trim(y, top_db=30)
-            hop_length = round(sr * 512 / (sr / 2))
-            onset_env, onset_env_p, onset_env_h = self._create_envelope(sr=sr, y=y, hop_length=hop_length)
-            
-            # generate priors tightens the range based on confidence
-            if confidence < .5:
-                prior = lognorm(s=.2, scale=guess)
-            elif .5 < confidence < .8:
-                prior = lognorm(s=.08, scale=guess)
-            elif confidence >= .8:
-                prior = lognorm(s=.04, scale=guess)
-            else:
-                prior = lognorm(s=2, scale=120)
-                
-            # Pass 1: Full
-            self._emit_signal('sm', f"Pass 1: Full track")
-            tempo_full, _ = librosa.beat.beat_track(y=y, sr=sr, onset_envelope=onset_env, hop_length=hop_length, prior=prior)# type: ignore
-            # Pass 2: Percussion
-            self._emit_signal('sm', f"Pass 2: Percussion")
-            tempo_p, _ = librosa.beat.beat_track(y=y, sr=sr, onset_envelope=onset_env_p, hop_length=hop_length, prior=prior)# type: ignore
-            # Pass 3: Harmonics
-            self._emit_signal('sm', f"Pass 3: Harmonics")
-            tempo_h, _ = librosa.beat.beat_track(y=y, sr=sr, onset_envelope=onset_env_h, hop_length=hop_length, prior=prior)# type: ignore
-            
-            tempos = [self.list_to_num(tempo_full), self.list_to_num(tempo_p), self.list_to_num(tempo_h)]
-            tempo = statistics.multimode(tempos)
-            if len(tempo) > 1:
-                tempo = self._closest_to_guess(tempos, guess)
-            else:
-                tempo = self.list_to_num(tempo)
-            
-            # Emergency estimation in case beat_track fails
-            if not tempo > 0 :
-                self._emit_signal('sm', f"Beat track failure, attempting feature tempo estimation.")
-                tempo = librosa.feature.tempo(y=y,sr=sr,hop_length=hop_length,prior=prior) 
-                
-            confidence = '-' # I am not confident easy way to solve that, remove confidence.
-        else:
-            tempo = guess
-
-        tempo = self.list_to_num(tempo) # Convert from a list obj to a number
+        alphabet_library = ''.join(alphabet_library)
+        number_library = ''.join(number_library)
         
+        library = alphabet_library + number_library
+        
+        # Create the id
+        trackID = ''.join(secrets.choice(library) for _ in range(32))
+        
+        return trackID
+        
+    def _get_event_locations(self, timestamps: np.ndarray|list, tempo: int|float) -> list:
+        event_locs = []
+        beats_per_bar = 4
+        bps = tempo/60
+        for onset in timestamps:
+            elapsed_beats = onset * bps
+            bar_num = int(elapsed_beats // beats_per_bar) + 1
+            beat_in_bar = int(elapsed_beats % beats_per_bar) + 1
+            event_locs.append((bar_num, beat_in_bar))
+        event_locs = sorted(event_locs, key=lambda x: x[0])
+        
+        return event_locs
+    
+    def _generate_event_timestamps(self, y, sr, hop_length: int):
+        '''
+        Generates timestamps based on energy changes in the song
+        '''
+        timestamps = []
+        if self.audio_file:
+            y, sr = librosa.load(self.audio_file.path, sr=None)
+        # Describe harmony, timbre, and loudness over time.
+        chroma = librosa.feature.chroma_stft(y=y, sr=sr, hop_length=hop_length)
+        mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=13, hop_length=hop_length)
+        rms = librosa.feature.rms(y=y, hop_length=hop_length)
+
+        # Each row is one feature over time.
+        X = np.vstack([chroma, mfcc, rms])
+
+        # Put features on comparable scales, then smooth small frame-to-frame changes.
+        row_mean = X.mean(axis=1, keepdims=True)
+        row_std = X.std(axis=1, keepdims=True)
+        X = (X - row_mean) / np.maximum(row_std, 1e-8)
+
+        smooth_frames = max(1, int(0.5 * sr / hop_length))  # 0.5-second smoothing
+        X = uniform_filter1d(X, size=smooth_frames, axis=1)
+
+        # Compare the average features in a window before and after each candidate point.
+        window_sec = 3.0
+        window_frames = int(window_sec * sr / hop_length)
+        n_frames = X.shape[1] # type: ignore
+
+        novelty = np.zeros(n_frames)
+        if n_frames > 2 * window_frames:
+            prefix = np.pad(np.cumsum(X, axis=1), ((0, 0), (1, 0)))
+            centers = np.arange(window_frames, n_frames - window_frames)
+
+            before = (prefix[:, centers] - prefix[:, centers - window_frames]) / window_frames
+            after = (prefix[:, centers + window_frames] - prefix[:, centers]) / window_frames
+
+            # Larger values mean a bigger change across the candidate point.
+            novelty[centers] = np.linalg.norm(before - after, axis=0) / np.sqrt(X.shape[0])
+
+        # Smooth the change curve and select only prominent, separated peaks.
+        novelty = gaussian_filter1d(novelty, sigma=max(1, 0.5 * sr / hop_length))
+        valid = novelty[window_frames : n_frames - window_frames]
+
+        if valid.size:
+            height_cutoff = np.percentile(valid, 90)
+            prominence_cutoff = max(0.02, 0.20 * (np.percentile(valid, 95) - np.median(valid)))
+
+            min_gap_sec = 10
+            peaks, _ = find_peaks(
+                novelty,
+                height=height_cutoff,
+                prominence=prominence_cutoff,
+                distance=int(min_gap_sec * sr / hop_length),
+            )
+
+            # Exclude edge regions where a full comparison window isn't available.
+            peaks = peaks[
+                (peaks >= window_frames) &
+                (peaks < n_frames - window_frames)
+            ]
+
+            times_sec = librosa.frames_to_time(peaks, sr=sr, hop_length=hop_length)
+            timestamps = [round(float(t), 2) for t in times_sec]
+        else:
+            timestamps = []
+        
+        return timestamps
+        
+    def event_creator(self, y, sr, hop_length: int, tempo: int | float):
+        trackID = self._generate_trackID()
+        hop_length = hop_length // 2
+        timestamps = self._generate_event_timestamps(y, sr, hop_length)
+        event_locs = self._get_event_locations(timestamps, tempo)
+        beat_tracks_data = {
+                "beatTracks": [
+                {
+                    "trackInstanceId": trackID,
+                    "trackType": "RequestArenaSwap",
+                    "bEnabled": True,
+                    "bBeepEventsEnabled": False,
+                    "events": [
+                    ]
+                }
+            ]
+        }
+        
+        for event_loc in event_locs:
+            beat_tracks_data["beatTracks"][0]["events"].append(
+                {
+                    "timestamp":{
+                        "barNumber": int(event_loc[0]),
+                        "beatNumber": int(event_loc[1]),
+                        "sliceNumber": 0,
+                        "sliceCount": 1,
+                        "msOffset": 0
+                    }
+                }
+            )
+            
+        if self.imported_song:
+            self.imported_song["beatTracks"] = beat_tracks_data["beatTracks"]
+        else:
+            self.error_logger.write(f"Could not write for {self.audio_file} json file not found.")
+    
+    def clear_events(self, folder):
+        meta_path = Path(os.path.join(folder, "Meta.json"))
+        data = self.file_manager._load_json_utf16(meta_path)
+        try:
+            data["beatTracks"].clear()
+            self.file_manager._dump_json_as_utf8(meta_path, data)
+        except KeyError:
+            return
+    
+    # Custom tempo scoring
+    def _beat_grid_score(self, onset_env, bpm, sr, hop_length):
+        x = np.asarray(onset_env, dtype=float)
+        x = (x - x.mean()) / (x.std() + 1e-8)
+        period = 60 * sr / (bpm * hop_length)
+        frames = np.arange(len(x))
+        best = -np.inf
+
+        for phase in np.linspace(0, period, 80, endpoint=False):
+            n = int((len(x) - phase - period / 2) // period) + 1
+            if n < 4:
+                continue
+
+            beats = phase + period * np.arange(n)
+            halfway = beats + period / 2
+
+            score = np.mean(
+                np.interp(beats, frames, x) -
+                np.interp(halfway, frames, x)
+            )
+            best = max(best, score)
+
+        return best
+    
+    def _custom_tempo_guess(self, onset_env, sr, hop_length, init_guess: int|float|None):
+        score = self._beat_grid_score(onset_env, init_guess, sr, hop_length)
+        if score >= .8:
+            return (init_guess, score)
+        
+        high_scores = []
+        t = init_guess
+        if score > .8:
+            if (t, round(score, 2)) not in high_scores:
+                high_scores.append((t, round(score, 2)))
+                
+        threshhold_score = .8
+        while not high_scores and threshhold_score > 0:
+            t = 60
+            for i in range(60, 200):
+                score = self._beat_grid_score(onset_env, t, sr, hop_length)
+                if score > threshhold_score:
+                    if (t, round(score, 2)) not in high_scores:
+                        high_scores.append((t, round(score, 2)))
+                t += 1
+            threshhold_score -= .1
+            
+        return high_scores
+    
+    # Main tempo retrieval
+    def generate_data(self, audio_path, model: deeprhythm_custom.DeepRhythmPredictor):
+        confidence = 0.0
+        tempo = [] # starts as a list and gets narrowed to my best guess
+        data = None
+        
+        self._emit_signal('sm', f"Begining tempo estimation.")
+        
+        # Load song and get hop length
+        y, sr = librosa.load(audio_path, sr = None, mono=True)
+        hop_length = round(sr * 256 / (sr / 2))
+                
+        # initial guess
+        try:
+            data = self.file_manager._load_json_utf16(Path(self.json_file)) # type: ignore
+            guess, confidence = (data["analyseResult"]["tempo"], data["analyseResult"]["fitQuality"])
+            # Prevents obscenely low guesses from being used
+            if guess < 60 or confidence < .7:
+                raise KeyError
+        except (KeyError, TypeError):
+            tempo_guesses, confidences = model.predict_per_frame(audio_path, include_confidence=True)
+            pairs = [(key, value) for key, value in zip(tempo_guesses, confidences)] # type: ignore
+            pairs = sorted(pairs, key=lambda p: p[1])
+            confidences_by_guess = defaultdict(list)
+        
+            for guess, conf in pairs:
+                confidences_by_guess[guess].append(conf)
+                
+            averages = {
+                guess: sum(confs) / len(confs)
+                for guess, confs in confidences_by_guess.items()
+            }
+            guess, confidence = (pairs[-1][0], averages[pairs[-1][0]])
+        
+            if confidence < .8:
+                guess, confidence = max(averages.items(), key=lambda x: x[1])
+                     
+        # Refine estimation
+        y_trimmed, _ = librosa.effects.trim(y, top_db=40)
+        
+        # Create envelopes
+        onset_env, onset_env_p, onset_env_h = self._create_envelope(sr=sr, y=y_trimmed, hop_length=hop_length)
+        
+        # Generate priors tightens the range based on confidence
+        if confidence < .5:
+            prior = lognorm(s=.16, scale=guess)
+        elif .5 < confidence < .8:
+            prior = lognorm(s=.08, scale=guess)
+        elif confidence >= .8:
+            prior = lognorm(s=.02, scale=guess)
+        else:
+            prior = lognorm(s=.2, scale=120)
+            
+        # Pass 1: Full
+        self._emit_signal('sm', f"Pass 1: Full track")
+        tempo_full, _ = librosa.beat.beat_track(y=y, sr=sr, onset_envelope=onset_env, hop_length=hop_length, prior=prior)# type: ignore
+        
+        # Pass 2: Percussion
+        self._emit_signal('sm', f"Pass 2: Percussion")
+        tempo_p, _p = librosa.beat.beat_track(y=y, sr=sr, onset_envelope=onset_env_p, hop_length=hop_length, prior=prior)# type: ignore
+        
+        # Pass 3: Harmonics
+        self._emit_signal('sm', f"Pass 3: Harmonics")
+        tempo_h, _h = librosa.beat.beat_track(y=y, sr=sr, onset_envelope=onset_env_h, hop_length=hop_length, prior=prior)# type: ignore
+        
+        # have to check them, the editor problems were annoying me
+        scores = []
+        if (type(tempo_full) == np.ndarray and type(tempo_p) == np.ndarray and type(tempo_h) == np.ndarray):
+            self._emit_signal('sm', "Checking tempos in range 60, 200 for beat scores, this may take a moment\nPass 1 of 3")
+            scores.extend(self._custom_tempo_guess(onset_env, sr, hop_length, tempo_full[0]))
+            self._emit_signal('sm', "Checking tempos in range 60, 200 for beat scores, this may take a moment\nPass 2 of 3")
+            scores.extend(self._custom_tempo_guess(onset_env, sr, hop_length, tempo_p[0]))
+            self._emit_signal('sm', "Checking tempos in range 60, 200 for beat scores, this may take a moment\nPass 3 of 3")
+            scores.extend(self._custom_tempo_guess(onset_env, sr, hop_length, tempo_h[0]))
+                        
+        # Build and sort various lists used later
+        tempos = [self.list_to_num(tempo_full), self.list_to_num(tempo_p), self.list_to_num(tempo_h)]
+        scores = sorted(scores, key=lambda x: x[0]) # Sort by score
+        scores = list(dict.fromkeys(scores)) # Remove duplicates
+        tempos = list(dict.fromkeys(tempos)) # Remove duplicates
+        extracted_tempos = [x[0] for x in scores]
+        
+        try:
+            # The margin of error for deeprhythm is 2-ish so if there is a guess within 2
+            # I'll use my custom tempo guess
+            distance_from_guess = abs(self._get_closest_val(extracted_tempos, guess) - guess)
+            if  distance_from_guess < 2:
+                guess = self._get_closest_val(extracted_tempos, guess)
+            elif scores and scores[0][0] * 2 in extracted_tempos:
+                guess = scores[0][0] * 2
+        except IndexError as e:
+            print(e)
+
+
+        # Extract the tempo from the list that is closest to
+        # the initial guess
+        tempo = self._get_closest_val(tempos, guess)
+        distance_from_guess = abs(tempo - guess)
+        
+        # Just use the guess if the refinement
+        # isn't outside the margin of error
+        if distance_from_guess < 2:
+            tempo = guess
+        
+        if type(tempo) == list:
+            self.list_to_num(tempo)
+        
+        # I figure if that method came up with exactly 1 match and the score is that high
+        # it oughta be good
+        if len(scores) == 1 and scores[0][1] > 1:
+            tempo = scores[0][0]
+            
+        # Basically if they both round to the same int I'm considering that good
+        # It's usually better to not have floats for tempos anyways.
+        if type(tempo) == int | float:
+            if round(guess) == round(tempo) and guess != tempo:
+                tempo = round(tempo)
+            else:
+                tempo = math.floor(tempo)
+        
+        confidence = '-' # I am not confident easy way to solve that, remove confidence.
+
+        tempo = self.list_to_num(tempo) # Convert from a list obj to a number             
+            
         self._emit_signal('sm', f"Tempo estimate: {tempo}")
         beat_offset = self._beat_offset(audio_file=audio_path, tempo=tempo)
-        
-        self._emit_signal('sm', f"Tempo estimate: {tempo}\nBeat Offset: {beat_offset}\nWrapping up...")
+                
+        # Event code
+        if self.main_window_states.autoGenEventTrack == 2:
+            self._emit_signal('sm', f"Creating event track")
+            self.event_creator(y=y_trimmed, sr=sr, hop_length=hop_length, tempo=tempo)
+            
         return tempo, confidence, beat_offset
     
     # Main
     def run_processor(self):
         scanned_song = {}
-        self.list_delivery.emit(self.song_names)
+        self._emit_signal("ps", 0)
         for i, path in enumerate(self.song_dirs):
             self._emit_signal("mm", f"{self.song_dirs[i]}")
             
-            json_file = None
-            imported_song = None
-            audio_file = None
+            self.json_file = None
+            self.imported_song = None
+            self.audio_file = None
             tempo = None
             confidence = 0
             beat_offset = 0
             fix_low_bpm = (self.main_window_states and self.main_window_states.adjustBPM == 2) # Init for the variable.
             write_string = ""
             old_tempo = 0
-            beat_sync = []
             rescan_tempo, rescan_beat_offset = self._check_rescan()
             
             for file in os.scandir(path):
                 if file.name == "Audio.ogg":
-                    audio_file = file
+                    # Need to go through the code and replace audio path with this
+                    self.audio_file = file
                 elif file.name == "Meta.json":
-                    json_file = str(file.path)
+                    self.json_file = str(file.path)
                 else:
                     self.error_logger.write(f"Unknown file: {file}")
                     continue
                 
-                if json_file:
-                    imported_song = self.file_manager._load_json_utf16(Path(json_file))
+                if self.json_file:
+                    self.imported_song = self.file_manager._load_json_utf16(Path(self.json_file))
                 else:
                     continue
+            
+            if not self.audio_file or not self.json_file:
+                self.error_logger.write(f"Failed to get need json and audio files!")
+                return
+            
+            if self.file_manager and (self.imported_song and self.audio_file):
                 
-                if self.file_manager and (imported_song and audio_file):
-                    tempo = imported_song["tempo"]
-                    scanned_song = self.file_manager.check_scanned_song(self.song_names[i])  
-                    if scanned_song:
-                        tempo = scanned_song["tempo"]
+                tempo = self.imported_song["tempo"]
+                scanned_song = self.file_manager.check_scanned_song(self.song_names[i])  
+                
+                if scanned_song:
+                    
+                    tempo = scanned_song["tempo"]
+                    old_tempo = tempo
+                    
+                    # Check for game data and scanned song list tempo mismatch.
+                    if (round(self.imported_song["tempo"], 2) != round(scanned_song["tempo"], 2)
+                        and round(self.imported_song["tempo"], 2) != round(scanned_song["adjustedTempo"], 2)):
+                        
+                        tempo, confidence, beat_offset = self.generate_data(audio_path=self.audio_file, model=self.model)
                         old_tempo = tempo
-                        # Check for game data and scanned song list tempo mismatch.
-                        if round(imported_song["tempo"], 2) != round(scanned_song["tempo"], 2) and round(imported_song["tempo"], 2) != round(scanned_song["adjustedTempo"], 2):
-                            tempo, confidence, beat_offset = self._get_tempo(audio_path=audio_file, model=self.model)
-                            old_tempo = tempo
-                            # _get_tempo already adjusts the bpm
-                            rescan_beat_offset = False
-                        elif rescan_tempo:
-                            tempo, confidence, beat_offset = self._get_tempo(audio_path=audio_file, model=self.model)
-                            old_tempo = tempo
-                            # _get_tempo already adjusts the bpm
-                            rescan_beat_offset = False
-                        else:
-                            beat_offset = scanned_song["beatOffset"]
-                    else:
-                        tempo, confidence, beat_offset = self._get_tempo(audio_path=audio_file, model=self.model)
+                        # _get_tempo already adjusts the bpm
+                        rescan_beat_offset = False
+                        
+                    elif rescan_tempo:
+                        
+                        tempo, confidence, beat_offset = self.generate_data(audio_path=self.audio_file, model=self.model)
                         old_tempo = tempo
-                    
-                    if fix_low_bpm:
-                        tempo, old_tempo = self._adjust_tempo(tempo, 95)
-                         
-                    if rescan_beat_offset:
-                        beat_offset = self._beat_offset(audio_file=audio_file, tempo=tempo)
-                    
-                    # Round the tempo data to a meaningful level of percision.
-                    # DO THIS LAST roudning can mess up calculations.
-                    tempo = round(tempo, 2)
-                    old_tempo = round(old_tempo, 2)
-                    
-                    if not confidence and scanned_song:
-                        confidence = scanned_song["confidence"]
-                    
-                    imported_song["tempo"] = tempo
-                    imported_song["customTempoSections"] = []
-                    if np.any(beat_sync):
-                        for beat in beat_sync: # type: ignore
-                            imported_song["customTempoSections"].append(
-                                {
-                                    "tempo": tempo,
-                                    "startAbsoluteTime": beat
-                                }
-                            )
+                        # _get_tempo already adjusts the bpm
+                        rescan_beat_offset = False
+                        
                     else:
-                        imported_song["customTempoSections"] = []
-                    imported_song["beatOffset"] = beat_offset
-                                            
-                    self.file_manager._dump_json_as_utf8(Path(json_file).resolve(), imported_song)
-                    
-                    if type(confidence) != str:     
-                        write_string = f"{self.song_names[i]} (Tempo: {tempo}, Confidence: {int(confidence * 100)}%, {beat_offset})"
-                    else:
-                        write_string = f"{self.song_names[i]} (Tempo: {tempo}, Confidence: {confidence}, {beat_offset})"
-                    
-                    # log
-                    self.info_logger.write(write_string)
-                    
-                    song_data = {
-                        "tempo":old_tempo,
-                        "adjustedTempo":tempo,
-                        "beatOffset":beat_offset,
-                        "confidence":confidence,
-                    }
-                    
-                    if scanned_song:
-                        self.file_manager.update_scanned_item(self.song_names[i], song_data)
-                    else:
-                        self.file_manager.add_scanned_item(self.song_names[i], song_data)
-            self._emit_signal('ps', i+1)
-        self.main_window_states.freshScan = 0
-        self.file_manager.save_state(main_window_states=self.main_window_states)
-        
-    def run_single_shot(self, folder_name):
-        if not folder_name:
-            return
-        
-        self._emit_signal("mm", f"Scanning {folder_name}")
-        folder = None
-        
-        # Get dir
-        for f in self.song_dirs:
-            if folder_name in f:
-                folder = f
-                break
-            
-        if not folder:
-            return
-        
-        # Init vars
-        json_file = None
-        imported_song = None
-        audio_file = None
-        tempo = None
-        confidence = 0
-        beat_offset = 0
-        fix_low_bpm = (self.main_window_states and self.main_window_states.adjustBPM == 2) # Init for the variable.
-        write_string = ""
-        old_tempo = 0
-        beat_sync = []
-        
-        for file in os.scandir(folder):
-            if file.name == "Audio.ogg":
-                audio_file = file
-            elif file.name == "Meta.json":
-                json_file = str(file.path)
-            else:
-                self.error_logger.write(f"Unknown file: {file}")
-                continue
-            
-            if json_file:
-                imported_song = self.file_manager._load_json_utf16(Path(json_file))
-            else:
-                continue
-            
-            if self.file_manager and (imported_song and audio_file):
-                tempo = imported_song["tempo"]
-                scanned_song = self.file_manager.check_scanned_song(folder_name)  
-                time.sleep(3)
-                tempo, confidence, beat_offset = self._get_tempo(audio_path=audio_file, model=self.model)
+                        beat_offset = scanned_song["beatOffset"]   
+                else:
+                    tempo, confidence, beat_offset = self.generate_data(audio_path=self.audio_file, model=self.model)
+                    old_tempo = tempo
                 
                 if fix_low_bpm:
                     tempo, old_tempo = self._adjust_tempo(tempo, 95)
-                                        
+                        
+                if rescan_beat_offset:
+                    beat_offset = self._beat_offset(audio_file=self.audio_file, tempo=tempo)
+                    
+
                 # Round the tempo data to a meaningful level of percision.
                 # DO THIS LAST roudning can mess up calculations.
                 tempo = round(tempo, 2)
@@ -468,27 +667,17 @@ class SongAnalyzer():
                 
                 if not confidence and scanned_song:
                     confidence = scanned_song["confidence"]
-                
-                imported_song["tempo"] = tempo
-                imported_song["customTempoSections"] = []
-                if np.any(beat_sync):
-                    for beat in beat_sync: # type: ignore
-                        imported_song["customTempoSections"].append(
-                            {
-                                "tempo": tempo,
-                                "startAbsoluteTime": beat
-                            }
-                        )
-                else:
-                    imported_song["customTempoSections"] = []
-                imported_song["beatOffset"] = beat_offset
+                                    
+                self.imported_song["tempo"] = tempo
+                self.imported_song["customTempoSections"] = []
+                self.imported_song["beatOffset"] = beat_offset
                                         
-                self.file_manager._dump_json_as_utf8(Path(json_file).resolve(), imported_song)
+                self.file_manager._dump_json_as_utf8(Path(self.json_file).resolve(), self.imported_song)
                 
                 if type(confidence) != str:     
-                    write_string = f"{folder_name} (Tempo: {tempo}, Confidence: {int(confidence * 100)}%, {beat_offset})"
+                    write_string = f"{self.song_names[i]} (Tempo: {tempo}, Confidence: {int(confidence * 100)}%, {beat_offset})"
                 else:
-                    write_string = f"{folder_name} (Tempo: {tempo}, Confidence: {confidence}, {beat_offset})"
+                    write_string = f"{self.song_names[i]} (Tempo: {tempo}, Confidence: {confidence}, {beat_offset})"
                 
                 # log
                 self.info_logger.write(write_string)
@@ -501,8 +690,86 @@ class SongAnalyzer():
                 }
                 
                 if scanned_song:
-                    self.file_manager.update_scanned_item(folder_name, song_data)
+                    self.file_manager.update_scanned_item(self.song_names[i], song_data)
                 else:
-                    self.file_manager.add_scanned_item(folder_name, song_data)
+                    self.file_manager.add_scanned_item(self.song_names[i], song_data)
+            self._emit_signal('ps', i+1)
+        self.main_window_states.freshScan = 0
+        self.file_manager.save_state(main_window_states=self.main_window_states)
+        self._emit_signal("ps", 0)
+        
+    def run_single_shot(self, folder_path):
+        if not folder_path:
+            return
+        
+        self._emit_signal("mm", f"Scanning {folder_path}")
+        
+        # Init vars
+        self.imported_song = None
+        tempo = None
+        confidence = 0
+        beat_offset = 0
+        fix_low_bpm = (self.main_window_states and self.main_window_states.adjustBPM == 2) # Init for the variable.
+        write_string = ""
+        old_tempo = 0
+        
+        for file in os.scandir(folder_path):
+            if file.name == "Audio.ogg":
+                self.audio_file = file
+            elif file.name == "Meta.json":
+                self.json_file = str(file.path)
+            else:
+                self.error_logger.write(f"Unknown file: {file}")
+                continue
+            if self.json_file:
+                self.imported_song = self.file_manager._load_json_utf16(Path(self.json_file))
+            else:
+                continue
+            
+        if not self.audio_file or not self.json_file:
+            self.error_logger.write(f"Failed to get need json and audio files!")
+            return
+        
+        if self.file_manager and (self.imported_song and self.audio_file):
+            tempo = self.imported_song["tempo"]
+            scanned_song = self.file_manager.check_scanned_song(folder_path)  
+            time.sleep(3)
+            tempo, confidence, beat_offset = self.generate_data(audio_path=self.audio_file, model=self.model)
+            if fix_low_bpm:
+                tempo, old_tempo = self._adjust_tempo(tempo, 95)
+                                    
+            # Round the tempo data to a meaningful level of percision.
+            # DO THIS LAST roudning can mess up calculations.
+            tempo = round(tempo, 2)
+            old_tempo = round(old_tempo, 2)
+            
+            if not confidence and scanned_song:
+                confidence = scanned_song["confidence"]
+                            
+            self.imported_song["tempo"] = tempo
+            self.imported_song["customTempoSections"] = []
+            self.imported_song["beatOffset"] = beat_offset
+                        
+            self.file_manager._dump_json_as_utf8(Path(self.json_file).resolve(), self.imported_song)
+            
+            if type(confidence) != str:     
+                write_string = f"{folder_path} (Tempo: {tempo}, Confidence: {int(confidence * 100)}%, {beat_offset})"
+            else:
+                write_string = f"{folder_path} (Tempo: {tempo}, Confidence: {confidence}, {beat_offset})"
+            
+            # log
+            self.info_logger.write(write_string)
+            
+            song_data = {
+                "tempo":old_tempo,
+                "adjustedTempo":tempo,
+                "beatOffset":beat_offset,
+                "confidence":confidence,
+            }
+            
+            if scanned_song:
+                self.file_manager.update_scanned_item(folder_path, song_data)
+            else:
+                self.file_manager.add_scanned_item(folder_path, song_data)
                     
         self.file_manager.save_state(main_window_states=self.main_window_states)
