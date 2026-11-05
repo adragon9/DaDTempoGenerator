@@ -7,6 +7,7 @@
 - Further refinements on tempo estimation
 - Added the ability to clear events for a song from the context menu
 - Added logging that should catch problems stemming from the worker thread
+- fixed a bug where the file path was being used as the song name
 
 ## [1.1.3-beta] [11/4/26]
 

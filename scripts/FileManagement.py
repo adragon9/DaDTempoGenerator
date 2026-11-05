@@ -117,7 +117,6 @@ class FileManager():
                 "user_choices":{}
             }
             self._dump_json_as_utf8(self.__scanned_path__, scanned_songs)
-        
         scanned_songs = self._load_json_utf16(self.__scanned_path__)                
         scanned_songs["songs"][obj_name] = obj
         self._dump_json_as_utf8(self.__scanned_path__, scanned_songs)

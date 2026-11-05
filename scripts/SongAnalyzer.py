@@ -766,9 +766,10 @@ class SongAnalyzer():
                 "confidence":confidence,
             }
             
+            name = Path(folder_path).name
             if scanned_song:
-                self.file_manager.update_scanned_item(folder_path, song_data)
+                self.file_manager.update_scanned_item(name, song_data)
             else:
-                self.file_manager.add_scanned_item(folder_path, song_data)
-                    
+                self.file_manager.add_scanned_item(name, song_data)
+                
         self.file_manager.save_state(main_window_states=self.main_window_states)
