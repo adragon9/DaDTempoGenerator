@@ -16,9 +16,13 @@
 - Run - runs the analysis
 - Offset Calibration - opens the calibration window
 
-### Song list
+### Song list context menu
 
-- Right click on any song and click scan to scan that individual song
+- Right click any song to:
+  - scan that song individually
+  - delete auto generated song events
+  - open the folder where the song is located
+  - close the context menu
 
 ## Info
 
